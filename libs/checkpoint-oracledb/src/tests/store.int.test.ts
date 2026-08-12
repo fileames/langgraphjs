@@ -1491,12 +1491,14 @@ describeIfOracle("OracleStore vector search", () => {
         ).resolves.toEqual([expect.objectContaining({ key: "doc" })]);
 
         await store.put(["vectors"], "doc", { text: "apple fruit" }, false);
-        const results = await store.search(["vectors"], {
-          query: "apple",
-          limit: 10,
+        // The vector rows are gone, so the item drops out of vector search
+        // entirely, but the item itself is still stored.
+        await expect(
+          store.search(["vectors"], { query: "apple", limit: 10 })
+        ).resolves.toEqual([]);
+        await expect(store.get(["vectors"], "doc")).resolves.toMatchObject({
+          value: { text: "apple fruit" },
         });
-        expect(results.map((item) => item.key)).toEqual(["doc"]);
-        expect(results[0].score).toBeUndefined();
       },
       { index: indexConfig }
     );
@@ -1526,17 +1528,16 @@ describeIfOracle("OracleStore vector search", () => {
         await countStoreRows(prefix, "STORE_VECTORS", namespace, "doc")
       ).toBe(0);
 
+      // The JSON-only write cleared the vector rows, so a vector search no
+      // longer returns the item, while the updated value is still readable.
       const afterUpdate = await vectorStore.search(namespace, {
         query: "apple",
         limit: 10,
       });
-      expect(afterUpdate).toEqual([
-        expect.objectContaining({
-          key: "doc",
-          value: { text: "banana fruit" },
-        }),
-      ]);
-      expect(afterUpdate[0].score).toBeUndefined();
+      expect(afterUpdate).toEqual([]);
+      await expect(vectorStore.get(namespace, "doc")).resolves.toMatchObject({
+        value: { text: "banana fruit" },
+      });
 
       await vectorStore.put(namespace, "deleted", { text: "apple fruit" });
       expect(
