@@ -123,6 +123,22 @@ async function deleteStoreConfig(tableSuffix: string): Promise<void> {
   }
 }
 
+async function readStoreMigrationVersions(
+  prefix: string
+): Promise<number[]> {
+  const connection = await oracledb.getConnection(oracleConnection);
+  try {
+    const result = await connection.execute<{ V: number }>(
+      `SELECT v FROM STORE_MIGRATIONS_${prefix.toUpperCase()} ORDER BY v`,
+      {},
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    return (result.rows ?? []).map((row) => Number(row.V));
+  } finally {
+    await connection.close();
+  }
+}
+
 async function readVectorMigrationVersions(
   prefix: string
 ): Promise<number[]> {
@@ -1143,6 +1159,9 @@ describeIfOracle("OracleStore BaseStore contract", () => {
         store.put(["ok", "langgraph"], "good", { ok: true })
       ).resolves.toBeUndefined();
 
+      await expect(
+        store.put(["ok", 123 as unknown as string], "bad", { ok: true })
+      ).rejects.toBeInstanceOf(InvalidNamespaceError);
       await expect(
         store.batch([{ namespace: [], key: "bad", value: null }])
       ).rejects.toBeInstanceOf(InvalidNamespaceError);
@@ -2481,6 +2500,62 @@ describeIfOracle("OracleStore table naming", () => {
         () =>
           new OracleStore({ connection: oracleConnection, tableSuffix })
       ).toThrow(/must start with a letter/);
+    }
+  });
+});
+
+describeIfOracle("OracleStore suffix isolation", () => {
+  test("keeps migrations and data independent across suffixes", async () => {
+    const first = uniquePrefix().replace(/_+$/, "");
+    const second = uniquePrefix().replace(/_+$/, "");
+    const storeA = new OracleStore({
+      connection: oracleConnection,
+      tableSuffix: first,
+    });
+    const storeB = new OracleStore({
+      connection: oracleConnection,
+      tableSuffix: second,
+    });
+
+    try {
+      await storeA.setup();
+      await storeB.setup();
+
+      // Each suffix owns its own migration table and applied versions.
+      await expect(readStoreMigrationVersions(first)).resolves.toEqual([
+        0, 1, 2, 3, 4,
+      ]);
+      await expect(readStoreMigrationVersions(second)).resolves.toEqual([
+        0, 1, 2, 3, 4,
+      ]);
+
+      // Data written under one suffix is invisible to the other.
+      await storeA.put(["shared"], "item", { owner: "a" });
+      await expect(storeA.get(["shared"], "item")).resolves.toMatchObject({
+        value: { owner: "a" },
+      });
+      await expect(storeB.get(["shared"], "item")).resolves.toBeNull();
+      await expect(
+        storeB.search(["shared"], { limit: 10 })
+      ).resolves.toEqual([]);
+    } finally {
+      await storeA.stop();
+      await storeB.stop();
+      await dropStoreTables(first);
+      await dropStoreTables(second);
+    }
+  });
+
+  test("surfaces connection failures from setup", async () => {
+    const store = new OracleStore({
+      connection: { ...oracleConnection, password: "definitely-not-valid" },
+      tableSuffix: uniquePrefix().replace(/_+$/, ""),
+    });
+
+    try {
+      await expect(store.setup()).rejects.toThrow();
+    } finally {
+      await store.stop().catch(() => {});
     }
   });
 });
