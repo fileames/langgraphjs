@@ -58,6 +58,9 @@ class FakeSetupConnection {
     if (/^\s*INSERT INTO\b/i.test(sql)) {
       return {};
     }
+    if (/^\s*DROP INDEX\b/i.test(sql)) {
+      return {};
+    }
     // Statements issued by the vector dimension probe.
     if (
       /^\s*MERGE INTO\b/i.test(sql) ||
@@ -129,7 +132,6 @@ interface StoreStateProbe {
     allowDmlProbe: boolean
   ): Promise<"native" | "string">;
   probeNativeVectorQueryBinding(connection: unknown): Promise<void>;
-  validatePersistedVectorDistance(connection: unknown): Promise<void>;
   isSetup: boolean;
   setupPromise?: Promise<void>;
   poolPromise?: Promise<unknown>;

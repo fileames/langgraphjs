@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { IndexConfig } from "@langchain/langgraph-checkpoint";
 
 import { ORACLE_VECTOR_MAX_DIMENSIONS } from "./constants.js";
-import { generatedIdentifier } from "./identifiers.js";
+import { generatedIdentifier, validateIdentifier } from "./identifiers.js";
 
 /**
  * Oracle AI Vector Search configuration for {@link OracleStore}.
@@ -61,6 +61,21 @@ export interface OracleIndexConfig extends IndexConfig {
   index_type?: OracleIndexTypeConfig;
   /** Vector index target accuracy percentage (1-100). */
   accuracy?: number;
+  /**
+   * Degree of parallelism for building the vector index.
+   *
+   * JavaScript-only build hint. It is not part of the table suffix and is not
+   * registered in `STORE_CONFIGS`, so it never affects which tables a Python
+   * store resolves to.
+   */
+  parallel?: number;
+  /**
+   * Name for the vector index, instead of the derived one.
+   *
+   * JavaScript-only, and excluded from the suffix and `STORE_CONFIGS` for the
+   * same reason as {@link OracleIndexConfig.parallel}.
+   */
+  index_name?: string;
 }
 
 /** Shape of the persisted `STORE_CONFIGS` row used for validation. */
@@ -211,6 +226,14 @@ export function validateOracleIndexConfig(config: OracleIndexConfig): void {
 
   if (config.accuracy !== undefined && config.accuracy !== null) {
     validateIntegerOption("index accuracy", config.accuracy, 1, 100);
+  }
+
+  if (config.parallel !== undefined && config.parallel !== null) {
+    validateIntegerOption("index parallel", config.parallel, 1);
+  }
+
+  if (config.index_name !== undefined) {
+    validateIdentifier(config.index_name);
   }
 
   const indexType = config.index_type;
@@ -534,6 +557,9 @@ export function configuredVectorIndexName(
   vectorTableName: string,
   config: OracleIndexConfig
 ): string {
+  if (config.index_name !== undefined) {
+    return validateIdentifier(config.index_name);
+  }
   const digest = createHash("sha256")
     .update(pythonJsonDumps(storeConfigIndexParams(config)))
     .digest("hex")
@@ -565,6 +591,11 @@ export function createConfiguredVectorIndexSQL(
   if (accuracy) clauses.push(accuracy);
   const parameters = parametersClause(config);
   if (parameters) clauses.push(parameters);
+  if (config.parallel !== undefined && config.parallel !== null) {
+    clauses.push(
+      `PARALLEL ${validateIntegerOption("index parallel", config.parallel, 1)}`
+    );
+  }
   return clauses.join("\n");
 }
 

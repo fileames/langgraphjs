@@ -237,22 +237,26 @@ the one registered in `STORE_CONFIGS` and fails on a dimension, distance,
 accuracy, or index parameter mismatch instead of returning wrongly ranked
 rows.
 
-Additional VECTOR indexes can also be managed explicitly:
+The index is described entirely by the configuration; there is no separate
+index-creation call, matching Python. Two build hints have no Python
+equivalent and are therefore kept out of the table suffix and `STORE_CONFIGS`,
+so they never change which tables a store resolves to:
 
 ```ts
-await store.createVectorIndex({
-  type: "IVF",
-  name: "LG_MEMORY_IVF_IDX",
-  accuracy: 90,
-  neighborPartitions: 1,
-});
-
-const indexes = await store.listVectorIndexes();
-await store.dropVectorIndex({
-  name: "LG_MEMORY_IVF_IDX",
-  ifExists: true,
+const store = new OracleStore({
+  connection: oracleConnection,
+  index: {
+    dims: 1536,
+    embeddings: myEmbeddings,
+    index_name: "LG_MEMORY_IVF_IDX", // default: derived from the configuration
+    parallel: 4, // degree of parallelism for the index build
+    index_type: { type: "ivf", neighbor_partitions: 1 },
+  },
 });
 ```
+
+Existing indexes are reported by `getDiagnostics()` under
+`vector.observedIndexes`.
 
 ## Tables and cleanup
 

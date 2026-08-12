@@ -110,6 +110,19 @@ WHERE table_suffix = :tableSuffix`,
   }
 }
 
+async function deleteStoreConfig(tableSuffix: string): Promise<void> {
+  const connection = await oracledb.getConnection(oracleConnection);
+  try {
+    await connection.execute(
+      `DELETE FROM STORE_CONFIGS WHERE table_suffix = :tableSuffix`,
+      { tableSuffix }
+    );
+    await connection.commit();
+  } finally {
+    await connection.close();
+  }
+}
+
 async function readVectorMigrationVersions(
   prefix: string
 ): Promise<number[]> {
@@ -257,20 +270,6 @@ WHERE prefix = :namespacePath AND key = :key`,
   }
 }
 
-async function createUnrelatedStoreIndex(
-  prefix: string,
-  indexName: string
-): Promise<void> {
-  const connection = await oracledb.getConnection(oracleConnection);
-  try {
-    await connection.execute(
-      `CREATE INDEX ${indexName.toUpperCase()} ON STORE_${prefix.toUpperCase()} (key)`
-    );
-  } finally {
-    await connection.close();
-  }
-}
-
 function oracleErrorCode(error: unknown): number | string | undefined {
   if (typeof error !== "object" || error === null) return undefined;
   const code = (error as { errorNum?: number; code?: string | number })
@@ -344,7 +343,7 @@ function embedText(text: string): number[] {
   return [0, 0, 1];
 }
 
-const indexConfig: IndexConfig = {
+const indexConfig: OracleIndexConfig = {
   dims: 3,
   embeddings: testEmbeddings as IndexConfig["embeddings"],
   fields: ["text"],
@@ -1145,11 +1144,10 @@ describeIfOracle("OracleStore BaseStore contract", () => {
   });
 });
 
-describeIfOracle("OracleStore vector index management", () => {
-  test("creates an HNSW vector index and leaves search semantics unchanged", async (context) => {
+describeIfOracle("OracleStore configured vector index", () => {
+  test("leaves search semantics unchanged with an HNSW index", async (context) => {
     await withStore(
-      async (store, prefix) => {
-        const indexName = `${prefix}HNSW_IDX`;
+      async (store) => {
         await store.put(["vectors"], "indexed", {
           text: "apple fruit",
           color: "red",
@@ -1160,22 +1158,6 @@ describeIfOracle("OracleStore vector index management", () => {
           { text: "apple fruit", color: "red" },
           false
         );
-
-        try {
-          await store.createVectorIndex({
-            type: "HNSW",
-            name: indexName,
-            accuracy: 90,
-            neighbors: 2,
-            efConstruction: 4,
-            parallel: 1,
-          });
-        } catch (error) {
-          skipIfHnswMemoryUnavailable(context, error);
-          throw error;
-        }
-
-        await expect(userIndexExists(indexName)).resolves.toBe(true);
 
         const results = await store.search(["vectors"], {
           query: "apple",
@@ -1189,195 +1171,67 @@ describeIfOracle("OracleStore vector index management", () => {
         expect(results[0].score).toEqual(expect.any(Number));
         expect(results[1].score).toBeUndefined();
       },
-      { index: indexConfig }
-    );
-  });
-
-  test("creates an IVF vector index", async () => {
-    await withStore(
-      async (store, prefix) => {
-        const indexName = `${prefix}IVF_IDX`;
-        await store.put(["vectors"], "doc", { text: "apple fruit" });
-
-        await store.createVectorIndex({
-          type: "IVF",
-          name: indexName,
+      {
+        index: {
+          ...indexConfig,
           accuracy: 90,
-          neighborPartitions: 1,
+          index_type: { type: "hnsw", neighbors: 2, efconstruction: 4 },
+        },
+        context,
+      }
+    );
+  });
+
+  test("honours a caller supplied index name and parallelism", async () => {
+    const indexName = `${uniquePrefix()}NAMED_IVF_IDX`.toUpperCase();
+    await withStore(
+      async (store, prefix) => {
+        await store.put(["vectors"], "doc", { text: "apple fruit" });
+
+        await expect(userIndexExists(indexName)).resolves.toBe(true);
+        await expect(storeVectorIndexNames(prefix)).resolves.toEqual([
+          indexName,
+        ]);
+      },
+      {
+        index: {
+          ...indexConfig,
+          index_name: indexName,
           parallel: 1,
-        });
-
-        await expect(userIndexExists(indexName)).resolves.toBe(true);
-      },
-      { index: indexConfig }
+          index_type: { type: "ivf", neighbor_partitions: 1 },
+        },
+      }
     );
   });
 
-  test("lists vector indexes after IVF creation", async () => {
-    await withStore(
-      async (store, prefix) => {
-        const indexName = `${prefix}IVF_LIST_IDX`;
-        await store.put(["vectors"], "doc", { text: "apple fruit" });
-
-        await store.createVectorIndex({
-          type: "IVF",
-          name: indexName,
-          accuracy: 90,
-          neighborPartitions: 1,
-          parallel: 1,
-        });
-
-        const indexes = await store.listVectorIndexes();
-        const created = indexes.find((index) => index.name === indexName);
-
-        expect(created).toMatchObject({
-          name: indexName,
-          tableName: `STORE_VECTORS_${prefix}`.toUpperCase(),
-          columnName: "EMBEDDING",
-          status: expect.any(String),
-          indexType: expect.any(String),
-          appearsOnStoreVectorEmbedding: true,
-        });
-      },
-      { index: indexConfig }
-    );
-  });
-
-  test("drops an IVF vector index after creation", async () => {
-    await withStore(
-      async (store, prefix) => {
-        const indexName = `${prefix}IVF_DROP_IDX`;
-        await store.put(["vectors"], "doc", { text: "apple fruit" });
-
-        await store.createVectorIndex({
-          type: "IVF",
-          name: indexName,
-          neighborPartitions: 1,
-        });
-
-        await expect(userIndexExists(indexName)).resolves.toBe(true);
-        await store.dropVectorIndex({ name: indexName });
-        await expect(userIndexExists(indexName)).resolves.toBe(false);
-        await expect(store.listVectorIndexes()).resolves.not.toEqual(
-          expect.arrayContaining([expect.objectContaining({ name: indexName })])
-        );
-      },
-      { index: indexConfig }
-    );
-  });
-
-  test("creates a vector index with a default name", async (context) => {
-    await withStore(
-      async (store, prefix) => {
-        const indexName = `STORE_VECTORS_${prefix}_EMBED_HNSW_IDX`;
-        await store.put(["vectors"], "doc", { text: "apple fruit" });
-
-        try {
-          await store.createVectorIndex({
-            type: "HNSW",
-            accuracy: 95,
-          });
-        } catch (error) {
-          skipIfHnswMemoryUnavailable(context, error);
-          throw error;
-        }
-
-        await expect(userIndexExists(indexName)).resolves.toBe(true);
-      },
-      { index: indexConfig }
-    );
-  });
-
-  test("no-ops when dropping a missing vector index with ifExists true", async () => {
-    await withStore(async (store, prefix) => {
-      await expect(
-        store.dropVectorIndex({
-          name: `${prefix}MISSING_IDX`,
-          ifExists: true,
-        })
-      ).resolves.toBeUndefined();
-    });
-  });
-
-  test("requires an index configuration before vector index creation", async () => {
-    await withStore(async (store, prefix) => {
-      await expect(
-        store.createVectorIndex({ type: "HNSW", name: `${prefix}HNSW_IDX` })
-      ).rejects.toThrow(
-        "OracleStore vector index creation requires an index configuration."
-      );
-    });
-  });
-
-  test("validates vector index names before executing DDL", async () => {
-    await withStore(
-      async (store) => {
-        await expect(
-          store.createVectorIndex({ type: "HNSW", name: "bad-name" })
-        ).rejects.toThrow("Invalid Oracle identifier");
-        await expect(
-          store.createVectorIndex({
-            type: "HNSW",
-            name: `A${"A".repeat(128)}`,
+  test("validates the index name before executing DDL", () => {
+    for (const indexName of [
+      "1BAD",
+      "BAD NAME",
+      'BAD"NAME',
+      "BAD-NAME",
+      "BAD;DROP TABLE X",
+    ]) {
+      expect(
+        () =>
+          new OracleStore({
+            connection: oracleConnection,
+            index: { ...indexConfig, index_name: indexName },
           })
-        ).rejects.toThrow("exceeds 128 bytes");
-      },
-      { index: indexConfig }
-    );
+      ).toThrow("Invalid Oracle identifier");
+    }
   });
 
-  test("validates vector index drop names before executing DDL", async () => {
-    await withStore(async (store) => {
-      await expect(store.dropVectorIndex({ name: "bad-name" })).rejects.toThrow(
-        "Invalid Oracle identifier"
-      );
-    });
-  });
-
-  test("refuses to drop unrelated indexes", async () => {
-    await withStore(async (store, prefix) => {
-      const indexName = `${prefix}STORE_ITEM_IDX`;
-      await store.start();
-      await createUnrelatedStoreIndex(prefix, indexName);
-
-      await expect(userIndexExists(indexName)).resolves.toBe(true);
-      await expect(
-        store.dropVectorIndex({ name: indexName, ifExists: true })
-      ).rejects.toThrow("not on");
-      await expect(userIndexExists(indexName)).resolves.toBe(true);
-      await expect(store.listVectorIndexes()).resolves.not.toEqual(
-        expect.arrayContaining([expect.objectContaining({ name: indexName })])
-      );
-    });
-  });
-
-  test("validates vector index numeric options before executing DDL", async () => {
-    await withStore(
-      async (store, prefix) => {
-        await expect(
-          store.createVectorIndex({
-            type: "HNSW",
-            name: `${prefix}BAD_ACCURACY_IDX`,
-            accuracy: 0,
+  test("validates parallelism before executing DDL", () => {
+    for (const parallel of [0, -1, 1.5, "8) --" as never]) {
+      expect(
+        () =>
+          new OracleStore({
+            connection: oracleConnection,
+            index: { ...indexConfig, parallel },
           })
-        ).rejects.toThrow("accuracy");
-        await expect(
-          store.createVectorIndex({
-            type: "HNSW",
-            name: `${prefix}BAD_HNSW_IDX`,
-            neighbors: 2,
-          })
-        ).rejects.toThrow("neighbors and efConstruction together");
-        await expect(
-          store.createVectorIndex({
-            type: "IVF",
-            name: `${prefix}BAD_IVF_IDX`,
-            neighborPartitions: 0,
-          })
-        ).rejects.toThrow("neighborPartitions");
-      },
-      { index: indexConfig }
-    );
+      ).toThrow("index parallel must be");
+    }
   });
 });
 
@@ -2091,6 +1945,42 @@ describeIfOracle("OracleStore vector search", () => {
       await store.start();
       await store.stop();
 
+      // The registered configuration catches this before the vector table is
+      // touched.
+      await expect(mismatchedStore.start()).rejects.toThrow(
+        `Dimension mismatch for tableSuffix "${prefix}": existing 3 dimensions, provided 4`
+      );
+    } finally {
+      await store.stop();
+      await mismatchedStore.stop();
+      await dropStoreTables(prefix);
+    }
+  });
+
+  test("detects a dimension mismatch with no registered configuration", async () => {
+    const prefix = uniquePrefix();
+    const store = new OracleStore({
+      connection: oracleConnection,
+      tableSuffix: prefix,
+      index: indexConfig,
+    });
+    const mismatchedStore = new OracleStore({
+      connection: oracleConnection,
+      tableSuffix: prefix,
+      index: {
+        dims: 4,
+        embeddings: testEmbeddings as IndexConfig["embeddings"],
+        fields: ["text"],
+      },
+    });
+
+    try {
+      await store.start();
+      await store.stop();
+      // Tables written by something that never registered a configuration,
+      // so only the physical vector column can reveal the mismatch.
+      await deleteStoreConfig(prefix);
+
       await expect(mismatchedStore.start()).rejects.toThrow(
         "OracleStore vector table is incompatible with index dims 4"
       );
@@ -2115,16 +2005,14 @@ describeIfOracle("OracleStore vector index configuration", () => {
 
         const indexes = await storeVectorIndexNames(prefix);
         expect(indexes).toHaveLength(1);
-        expect(indexes[0]).toMatch(
-          new RegExp(`^STORE_VECTORS_${prefix.toUpperCase()}IDX_[0-9A-F]{6}$`)
+        const vectorTable = `STORE_VECTORS_${prefix.toUpperCase()}`;
+        expect(indexes[0].startsWith(`${vectorTable}_IDX_`)).toBe(true);
+        expect(indexes[0].slice(`${vectorTable}_IDX_`.length)).toMatch(
+          /^[0-9A-F]{6}$/
         );
         await expect(readVectorMigrationVersions(prefix)).resolves.toEqual([
           0, 1,
         ]);
-
-        const listed = await store.listVectorIndexes();
-        expect(listed.map((index) => index.name)).toEqual(indexes);
-        expect(listed[0].appearsOnStoreVectorEmbedding).toBe(true);
       },
       { index: indexConfig, context }
     );

@@ -13,14 +13,10 @@ export type {
 } from "./saver.js";
 export { OracleStore } from "./store/index.js";
 export type {
-  OracleDropVectorIndexOptions,
-  OracleHNSWVectorIndexOptions,
-  OracleIVFVectorIndexOptions,
   OracleStoreOptions,
+  OracleStorePutOptions,
   OracleStoreSearchOptions,
   OracleStoreTTLConfig,
-  OracleVectorIndexInfo,
-  OracleVectorIndexOptions,
 } from "./store/index.js";
 export { ORACLE_VECTOR_DISTANCE_METRICS } from "./store/index-config.js";
 export type {

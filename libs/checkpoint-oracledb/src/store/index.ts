@@ -32,9 +32,11 @@ import {
 } from "../diagnostics.js";
 import {
   getCreateStoreMigrationTableSQL,
-  getCreateStoreTableSQL,
-  getCreateStoreVectorTableSQL,
   getCreateVectorMigrationTableSQL,
+  STORE_MIGRATIONS,
+  VECTOR_MIGRATIONS,
+  type OracleStoreMigration,
+  type OracleStoreMigrationContext,
 } from "./migrations.js";
 import {
   STORE_FIELD_PATH_MAX_BYTES,
@@ -44,10 +46,9 @@ import {
   STORE_VECTOR_NAMESPACE_PATH_MAX_BYTES,
   VECTOR_STRING_BIND_MAX_BYTES,
 } from "./constants.js";
-import { generatedIdentifier, validateIdentifier } from "./identifiers.js";
+import { validateIdentifier } from "./identifiers.js";
 import {
   assertStoredIndexConfigMatches,
-  createConfiguredVectorIndexSQL,
   defaultTableSuffix,
   distanceMetricSQL,
   scoreFromDistanceSQL,
@@ -134,41 +135,6 @@ function validateTableSuffix(suffix: string): string {
   return suffix;
 }
 
-export type OracleVectorIndexOptions =
-  | OracleHNSWVectorIndexOptions
-  | OracleIVFVectorIndexOptions;
-
-export interface OracleHNSWVectorIndexOptions {
-  type: "HNSW";
-  name?: string;
-  accuracy?: number;
-  neighbors?: number;
-  efConstruction?: number;
-  parallel?: number;
-}
-
-export interface OracleIVFVectorIndexOptions {
-  type: "IVF";
-  name?: string;
-  accuracy?: number;
-  neighborPartitions?: number;
-  parallel?: number;
-}
-
-export interface OracleVectorIndexInfo {
-  name: string;
-  tableName: string;
-  columnName: string;
-  status?: string;
-  indexType?: string;
-  appearsOnStoreVectorEmbedding: boolean;
-}
-
-export interface OracleDropVectorIndexOptions {
-  name: string;
-  ifExists?: boolean;
-}
-
 type StoreRow = {
   PREFIX: string;
   prefix?: string;
@@ -217,19 +183,6 @@ type PreparedVector = Omit<BoundVector, "embedding"> & {
 type NamespacePathRow = {
   PREFIX: string;
   prefix?: string;
-};
-
-type VectorIndexMetadataRow = {
-  INDEX_NAME: string;
-  index_name?: string;
-  TABLE_NAME: string;
-  table_name?: string;
-  COLUMN_NAME: string | null;
-  column_name?: string | null;
-  STATUS?: string | null;
-  status?: string | null;
-  INDEX_TYPE?: string | null;
-  index_type?: string | null;
 };
 
 type SqlFilter = {
@@ -313,192 +266,6 @@ const getExpectedStoreTables = (
 ];
 
 const STORE_BYTE_CONTEXT = "OracleStore";
-
-function defaultVectorIndexName(
-  vectorTableName: string,
-  type: OracleVectorIndexOptions["type"]
-): string {
-  return generatedIdentifier(`${vectorTableName}_EMBED_${type}_IDX`);
-}
-
-function validateIntegerRange(
-  label: string,
-  value: number | undefined,
-  min: number,
-  max: number
-): number | undefined {
-  if (value === undefined) return undefined;
-  if (
-    typeof value !== "number" ||
-    !Number.isInteger(value) ||
-    value < min ||
-    value > max
-  ) {
-    throw new Error(
-      `OracleStore vector index ${label} must be an integer between ${min} and ${max}. Received ${String(
-        value
-      )}.`
-    );
-  }
-  return value;
-}
-
-function validatePositiveInteger(
-  label: string,
-  value: number | undefined
-): number | undefined {
-  if (value === undefined) return undefined;
-  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 1) {
-    throw new Error(
-      `OracleStore vector index ${label} must be a positive safe integer. Received ${String(
-        value
-      )}.`
-    );
-  }
-  return value;
-}
-
-function vectorIndexName(
-  vectorTableName: string,
-  options: OracleVectorIndexOptions
-): string {
-  return options.name === undefined
-    ? defaultVectorIndexName(vectorTableName, options.type)
-    : validateIdentifier(options.name);
-}
-
-function validateVectorIndexOptions(
-  options: OracleVectorIndexOptions
-): OracleVectorIndexOptions {
-  if (typeof options !== "object" || options === null) {
-    throw new Error(
-      'OracleStore vector index type must be either "HNSW" or "IVF".'
-    );
-  }
-
-  // Accept Python's lowercase spelling so one config style works everywhere.
-  const rawType = (options as { type?: unknown }).type;
-  const type =
-    typeof rawType === "string"
-      ? (rawType.toUpperCase() as OracleVectorIndexOptions["type"])
-      : rawType;
-  if (type !== "HNSW" && type !== "IVF") {
-    throw new Error(
-      'OracleStore vector index type must be either "HNSW" or "IVF".'
-    );
-  }
-  options = { ...options, type } as OracleVectorIndexOptions;
-
-  validateIntegerRange("accuracy", options.accuracy, 1, 100);
-  validatePositiveInteger("parallel", options.parallel);
-
-  if (options.type === "HNSW") {
-    validateIntegerRange("neighbors", options.neighbors, 2, 2048);
-    validateIntegerRange("efConstruction", options.efConstruction, 1, 65535);
-    if (
-      (options.neighbors === undefined) !==
-      (options.efConstruction === undefined)
-    ) {
-      throw new Error(
-        "OracleStore HNSW vector index options require neighbors and efConstruction together."
-      );
-    }
-  } else {
-    validateIntegerRange(
-      "neighborPartitions",
-      options.neighborPartitions,
-      1,
-      10000000
-    );
-  }
-
-  return options;
-}
-
-function createVectorIndexSQL(
-  vectorTableName: string,
-  options: OracleVectorIndexOptions,
-  distanceMetric: string
-): string {
-  const validated = validateVectorIndexOptions(options);
-  const indexName = vectorIndexName(vectorTableName, validated);
-  const accuracy =
-    validated.accuracy === undefined
-      ? ""
-      : `\nWITH TARGET ACCURACY ${validated.accuracy}`;
-  const parallel =
-    validated.parallel === undefined ? "" : `\nPARALLEL ${validated.parallel}`;
-
-  if (validated.type === "HNSW") {
-    const parameters =
-      validated.neighbors === undefined
-        ? ""
-        : `\nPARAMETERS (type HNSW, neighbors ${validated.neighbors}, efconstruction ${validated.efConstruction})`;
-    return `CREATE VECTOR INDEX ${indexName}
-ON ${vectorTableName} (embedding)
-ORGANIZATION INMEMORY NEIGHBOR GRAPH
-DISTANCE ${distanceMetric}${accuracy}${parameters}${parallel}`;
-  }
-
-  const parameters =
-    validated.neighborPartitions === undefined
-      ? ""
-      : `\nPARAMETERS (type IVF, neighbor partitions ${validated.neighborPartitions})`;
-  return `CREATE VECTOR INDEX ${indexName}
-ON ${vectorTableName} (embedding)
-ORGANIZATION NEIGHBOR PARTITIONS
-DISTANCE ${distanceMetric}${accuracy}${parameters}${parallel}`;
-}
-
-function vectorIndexInfoFromRow(
-  row: VectorIndexMetadataRow,
-  vectorTableName: string
-): OracleVectorIndexInfo {
-  const name = row.INDEX_NAME ?? row.index_name;
-  const tableName = row.TABLE_NAME ?? row.table_name;
-  const columnName = row.COLUMN_NAME ?? row.column_name ?? "";
-  const status = row.STATUS ?? row.status ?? undefined;
-  const indexType = row.INDEX_TYPE ?? row.index_type ?? undefined;
-
-  return {
-    name,
-    tableName,
-    columnName,
-    status,
-    indexType,
-    appearsOnStoreVectorEmbedding:
-      tableName.toUpperCase() === vectorTableName &&
-      columnName.toUpperCase() === "EMBEDDING",
-  };
-}
-
-function vectorIndexMetadataSQL(whereClause: string): string {
-  return `SELECT
-  i.index_name,
-  i.table_name,
-  c.column_name,
-  i.status,
-  i.index_type
-FROM user_indexes i
-LEFT JOIN user_ind_columns c
-  ON c.index_name = i.index_name
-  AND c.table_name = i.table_name
-${whereClause}
-ORDER BY i.index_name, c.column_position`;
-}
-
-function validateDropVectorIndexOptions(
-  options: OracleDropVectorIndexOptions
-): string {
-  if (
-    typeof options !== "object" ||
-    options === null ||
-    typeof options.name !== "string"
-  ) {
-    throw new Error("OracleStore dropVectorIndex requires an index name.");
-  }
-  return validateIdentifier(options.name);
-}
 
 function validateNamespacePathLength(namespace: string[]): void {
   validateUtf8ByteLength(
@@ -1122,50 +889,6 @@ WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP`
     });
   }
 
-  async createVectorIndex(options: OracleVectorIndexOptions): Promise<void> {
-    if (!this.indexConfig) {
-      throw new Error(
-        "OracleStore vector index creation requires an index configuration."
-      );
-    }
-
-    const sql = createVectorIndexSQL(
-      this.vectorTableName,
-      options,
-      distanceMetricSQL(this.indexConfig)
-    );
-    await this.setup();
-    await this.withConnection(async (connection) => {
-      await connection.execute(sql);
-    });
-  }
-
-  async listVectorIndexes(): Promise<OracleVectorIndexInfo[]> {
-    return this.fetchStoreVectorIndexInfo();
-  }
-
-  async dropVectorIndex(options: OracleDropVectorIndexOptions): Promise<void> {
-    const indexName = validateDropVectorIndexOptions(options);
-    const indexes = await this.fetchVectorIndexInfoByName(indexName);
-
-    if (indexes.length === 0) {
-      if (options.ifExists) return;
-      throw new Error(
-        `OracleStore vector index "${indexName}" does not exist.`
-      );
-    }
-
-    if (!indexes.every((index) => index.appearsOnStoreVectorEmbedding)) {
-      throw new Error(
-        `OracleStore will not drop index "${indexName}" because it is not on ${this.vectorTableName}(EMBEDDING).`
-      );
-    }
-
-    await this.withConnection(async (connection) => {
-      await connection.execute(`DROP INDEX ${indexName}`);
-    });
-  }
-
   private async setup(): Promise<void> {
     if (this.isSetup) return;
     this.setupPromise ??= this.doSetup().catch((error) => {
@@ -1190,113 +913,40 @@ WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP`
     if (this.ensureTable) {
       await this.withConnection(async (connection) => {
         try {
-          const tables = {
-            store: this.tableName,
-            storeVectors: this.vectorTableName,
-            storeMigrations: this.migrationTableName,
-            vectorMigrations: this.vectorMigrationTableName,
+          const context: OracleStoreMigrationContext = {
+            tables: {
+              store: this.tableName,
+              storeVectors: this.vectorTableName,
+              storeMigrations: this.migrationTableName,
+              vectorMigrations: this.vectorMigrationTableName,
+            },
+            index: this.indexConfig,
           };
+
           await this.executeCreate(
             connection,
-            getCreateStoreMigrationTableSQL(tables)
+            getCreateStoreMigrationTableSQL(context.tables)
           );
-
-          const current = await connection.execute<{ V: number; v?: number }>(
-            `SELECT v FROM ${this.migrationTableName} ORDER BY v DESC FETCH FIRST 1 ROW ONLY`,
-            {},
-            { outFormat: oracledb.OUT_FORMAT_OBJECT }
+          await this.applyMigrations(
+            connection,
+            STORE_MIGRATIONS,
+            context,
+            this.migrationTableName,
+            this.tableName
           );
-          const currentVersion = current.rows?.[0]
-            ? Number(current.rows[0].V ?? current.rows[0].v)
-            : -1;
-
-          if (currentVersion >= 0) {
-            await this.assertSetupTableExists(connection, this.tableName);
-          }
-          if (currentVersion < 0) {
-            await this.executeCreate(
-              connection,
-              getCreateStoreTableSQL(tables)
-            );
-            await this.insertMigration(connection, 0);
-          }
-          if (currentVersion < 1) {
-            await this.executeCreate(
-              connection,
-              `CREATE INDEX ${generatedIdentifier(`${this.tableName}_PREFIX_IDX`)} ON ${this.tableName} (prefix) ONLINE`
-            );
-            await this.insertMigration(connection, 1);
-          }
-          if (currentVersion < 2) {
-            await this.executeCreate(
-              connection,
-              `CREATE INDEX ${generatedIdentifier(`IDX_${this.tableName}_EXPIRES_AT`)} ON ${this.tableName} (expires_at) ONLINE`
-            );
-            await this.insertMigration(connection, 2);
-          }
-          if (currentVersion < 3) {
-            await this.executeCreate(
-              connection,
-              `CREATE TABLE STORE_CONFIGS (
-  table_suffix VARCHAR2(4000) PRIMARY KEY,
-  detected_dims NUMBER NOT NULL,
-  distance_type VARCHAR2(4000) DEFAULT 'COSINE',
-  index_params JSON,
-  embed_fields VARCHAR2(4000),
-  created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-  last_used TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-)`
-            );
-            await this.insertMigration(connection, 3);
-          }
-          if (currentVersion < 4) {
-            await this.executeCreate(
-              connection,
-              "CREATE INDEX IDX_STORE_CONFIGS_TABLE_SUFFIX ON STORE_CONFIGS(table_suffix) ONLINE"
-            );
-            await this.insertMigration(connection, 4);
-          }
 
           if (this.indexConfig) {
             await this.executeCreate(
               connection,
-              getCreateVectorMigrationTableSQL(tables)
+              getCreateVectorMigrationTableSQL(context.tables)
             );
-            const vectorCurrent = await connection.execute<{
-              V: number;
-              v?: number;
-            }>(
-              `SELECT v FROM ${this.vectorMigrationTableName} ORDER BY v DESC FETCH FIRST 1 ROW ONLY`,
-              {},
-              { outFormat: oracledb.OUT_FORMAT_OBJECT }
+            await this.applyMigrations(
+              connection,
+              VECTOR_MIGRATIONS,
+              context,
+              this.vectorMigrationTableName,
+              this.vectorTableName
             );
-            const vectorVersion = vectorCurrent.rows?.[0]
-              ? Number(vectorCurrent.rows[0].V ?? vectorCurrent.rows[0].v)
-              : -1;
-            if (vectorVersion >= 0) {
-              await this.assertSetupTableExists(
-                connection,
-                this.vectorTableName
-              );
-            } else {
-              await this.executeCreate(
-                connection,
-                getCreateStoreVectorTableSQL(tables, this.indexConfig.dims)
-              );
-              await this.insertMigration(
-                connection,
-                0,
-                this.vectorMigrationTableName
-              );
-            }
-            if (vectorVersion < 1) {
-              await this.createConfiguredVectorIndex(connection);
-              await this.insertMigration(
-                connection,
-                1,
-                this.vectorMigrationTableName
-              );
-            }
             await this.validateVectorTableDimensions(connection);
             await this.registerStoreConfig(connection);
           }
@@ -1326,6 +976,70 @@ WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP`
       intervalMinutes * 60 * 1000
     );
     (this.ttlSweepTimer as { unref?: () => void }).unref?.();
+  }
+
+  /**
+   * Apply the versioned statements a migration table has not recorded yet.
+   *
+   * Mirrors Python's setup loop and the checkpoint saver's: the array index is
+   * the version, entries are applied in order, and a recorded version implies
+   * the table it created is still there.
+   */
+  private async applyMigrations(
+    connection: Connection,
+    migrations: OracleStoreMigration[],
+    context: OracleStoreMigrationContext,
+    migrationTableName: string,
+    requiredTableName: string
+  ): Promise<void> {
+    const result = await connection.execute<{ V: number; v?: number }>(
+      `SELECT v FROM ${migrationTableName} ORDER BY v DESC FETCH FIRST 1 ROW ONLY`,
+      {},
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    const currentVersion = result.rows?.[0]
+      ? Number(result.rows[0].V ?? result.rows[0].v)
+      : -1;
+
+    if (currentVersion >= 0) {
+      await this.assertSetupTableExists(connection, requiredTableName);
+    }
+    if (currentVersion >= migrations.length) {
+      throw new Error(
+        `OracleStore schema version ${currentVersion} in ${migrationTableName} is newer than the highest supported version ${
+          migrations.length - 1
+        }.`
+      );
+    }
+
+    for (
+      let version = currentVersion + 1;
+      version < migrations.length;
+      version += 1
+    ) {
+      const migration = migrations[version];
+      if (migration.condition && !migration.condition(context)) continue;
+      await this.executeMigration(connection, migration.sql(context));
+      await this.insertMigration(connection, version, migrationTableName);
+    }
+  }
+
+  private async executeMigration(
+    connection: Connection,
+    sql: string
+  ): Promise<void> {
+    try {
+      await this.executeCreate(connection, sql);
+    } catch (error) {
+      // ORA-51962: the database has no vector memory area, which an HNSW index
+      // requires. IVF indexes work without one.
+      if (!isOracleError(error, 51962)) throw error;
+      const wrapped = new Error(
+        `OracleStore could not create the HNSW vector index on ${this.vectorTableName} because this database has no vector memory area. Set VECTOR_MEMORY_SIZE, or configure index.index_type = { type: "ivf" }.`
+      );
+      (wrapped as { cause?: unknown }).cause = error;
+      throw wrapped;
+    }
   }
 
   private async assertSetupTableExists(
@@ -1438,32 +1152,6 @@ WHERE prefix = :namespacePath AND key = :key AND field_name = :fieldPath`,
         `DELETE FROM ${this.tableName} WHERE prefix = :namespacePath AND key = :key`,
         { namespacePath: namespacePathValue, key }
       );
-    }
-  }
-
-  /**
-   * Create the vector index described by the index configuration, as Python's
-   * second vector migration does.
-   */
-  private async createConfiguredVectorIndex(
-    connection: Connection
-  ): Promise<void> {
-    if (!this.indexConfig) return;
-
-    try {
-      await this.executeCreate(
-        connection,
-        createConfiguredVectorIndexSQL(this.vectorTableName, this.indexConfig)
-      );
-    } catch (error) {
-      // ORA-51962: the database has no vector memory area, which an HNSW index
-      // requires. IVF indexes work without one.
-      if (!isOracleError(error, 51962)) throw error;
-      const wrapped = new Error(
-        `OracleStore could not create the HNSW vector index on ${this.vectorTableName} because this database has no vector memory area. Set VECTOR_MEMORY_SIZE, or configure index.index_type = { type: "ivf" }.`
-      );
-      (wrapped as { cause?: unknown }).cause = error;
-      throw wrapped;
     }
   }
 
@@ -1714,42 +1402,6 @@ VALUES (source.prefix, source.key, JSON_OBJECT())`,
     } finally {
       await connection.close();
     }
-  }
-
-  private async fetchStoreVectorIndexInfo(): Promise<OracleVectorIndexInfo[]> {
-    const result = await this.withConnection((connection) =>
-      connection.execute<VectorIndexMetadataRow>(
-        vectorIndexMetadataSQL(
-          `WHERE i.table_name = :tableName
-  AND c.column_name = :columnName`
-        ),
-        {
-          tableName: this.vectorTableName,
-          columnName: "EMBEDDING",
-        },
-        { outFormat: oracledb.OUT_FORMAT_OBJECT }
-      )
-    );
-
-    return (result.rows ?? []).map((row) =>
-      vectorIndexInfoFromRow(row, this.vectorTableName)
-    );
-  }
-
-  private async fetchVectorIndexInfoByName(
-    indexName: string
-  ): Promise<OracleVectorIndexInfo[]> {
-    const result = await this.withConnection((connection) =>
-      connection.execute<VectorIndexMetadataRow>(
-        vectorIndexMetadataSQL("WHERE i.index_name = :indexName"),
-        { indexName },
-        { outFormat: oracledb.OUT_FORMAT_OBJECT }
-      )
-    );
-
-    return (result.rows ?? []).map((row) =>
-      vectorIndexInfoFromRow(row, this.vectorTableName)
-    );
   }
 
   private async executeManyWithDuplicateRetry<

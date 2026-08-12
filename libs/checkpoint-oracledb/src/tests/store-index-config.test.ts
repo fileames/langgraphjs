@@ -19,6 +19,10 @@ import {
   validateOracleIndexConfig,
   type OracleIndexConfig,
 } from "../store/index-config.js";
+import {
+  STORE_MIGRATIONS,
+  VECTOR_MIGRATIONS,
+} from "../store/migrations.js";
 
 const embeddings = {
   async embedDocuments() {
@@ -620,5 +624,108 @@ describe("stored configuration validation", () => {
         indexParams: "[1, 2]",
       })
     ).toThrow("Stored index configuration must decode to a JSON object");
+  });
+});
+
+describe("build hints that stay out of the shared identity", () => {
+  test("appends PARALLEL last, after PARAMETERS", () => {
+    const sql = createConfiguredVectorIndexSQL(
+      VECTOR_TABLE,
+      indexConfig({
+        parallel: 4,
+        index_type: { type: "ivf", neighbor_partitions: 2 },
+      })
+    );
+    const lines = sql.split("\n");
+    expect(lines[lines.length - 1]).toBe("PARALLEL 4");
+    expect(lines[lines.length - 2]).toContain("PARAMETERS (type IVF");
+  });
+
+  test("uses a caller supplied index name", () => {
+    expect(
+      configuredVectorIndexName(
+        VECTOR_TABLE,
+        indexConfig({ index_name: "lg_memory_idx" })
+      )
+    ).toBe("LG_MEMORY_IDX");
+  });
+
+  test("rejects an index name that is not a plain identifier", () => {
+    for (const index_name of ["1BAD", "BAD NAME", 'BAD"NAME', "BAD;DROP"]) {
+      expect(() =>
+        validateOracleIndexConfig(indexConfig({ index_name }))
+      ).toThrow("Invalid Oracle identifier");
+      expect(() =>
+        createConfiguredVectorIndexSQL(VECTOR_TABLE, indexConfig({ index_name }))
+      ).toThrow("Invalid Oracle identifier");
+    }
+  });
+
+  test("rejects parallelism that is not a positive integer", () => {
+    for (const parallel of [0, -1, 1.5, "8) --" as never, Number.NaN]) {
+      expect(() =>
+        validateOracleIndexConfig(indexConfig({ parallel }))
+      ).toThrow("index parallel must be");
+    }
+  });
+
+  test("keeps parallel and index_name out of the suffix and STORE_CONFIGS", () => {
+    const plain = indexConfig({ fields: ["text"] });
+    const hinted = indexConfig({
+      fields: ["text"],
+      parallel: 8,
+      index_name: "CUSTOM_IDX",
+    });
+
+    // Python knows neither option, so neither may change which tables the
+    // store resolves to or what it registers.
+    expect(defaultTableSuffix(hinted)).toBe(defaultTableSuffix(plain));
+    expect(storeConfigIndexParams(hinted)).toEqual(
+      storeConfigIndexParams(plain)
+    );
+  });
+});
+
+describe("store migrations", () => {
+  const tables = {
+    store: "STORE_MEMORY",
+    storeVectors: VECTOR_TABLE,
+    storeMigrations: "STORE_MIGRATIONS_MEMORY",
+    vectorMigrations: "VECTOR_MIGRATIONS_MEMORY",
+  };
+
+  test("keeps the store versions Python assigned", () => {
+    const sql = STORE_MIGRATIONS.map((migration) =>
+      migration.sql({ tables })
+    );
+
+    expect(sql).toHaveLength(5);
+    expect(sql[0]).toContain("CREATE TABLE STORE_MEMORY");
+    expect(sql[1]).toContain("(prefix) ONLINE");
+    expect(sql[2]).toContain("(expires_at) ONLINE");
+    expect(sql[3]).toContain("CREATE TABLE STORE_CONFIGS");
+    expect(sql[4]).toContain("IDX_STORE_CONFIGS_TABLE_SUFFIX");
+    expect(STORE_MIGRATIONS.every((m) => m.condition === undefined)).toBe(true);
+  });
+
+  test("creates the vector table then its index, as Python's VECTOR_MIGRATIONS do", () => {
+    const context = { tables, index: indexConfig() };
+
+    expect(VECTOR_MIGRATIONS).toHaveLength(2);
+    expect(VECTOR_MIGRATIONS[0].sql(context)).toContain(
+      `CREATE TABLE ${VECTOR_TABLE}`
+    );
+    expect(VECTOR_MIGRATIONS[0].sql(context)).toContain("embedding VECTOR(2)");
+    expect(VECTOR_MIGRATIONS[1].sql(context)).toContain("CREATE VECTOR INDEX");
+  });
+
+  test("skips the index migration without an index configuration", () => {
+    expect(VECTOR_MIGRATIONS[1].condition?.({ tables })).toBe(false);
+    expect(VECTOR_MIGRATIONS[1].condition?.({ tables, index: indexConfig() })).toBe(
+      true
+    );
+    expect(() => VECTOR_MIGRATIONS[0].sql({ tables })).toThrow(
+      "vector migrations require an index configuration"
+    );
   });
 });
