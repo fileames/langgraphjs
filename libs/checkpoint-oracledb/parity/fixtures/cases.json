@@ -1,0 +1,175 @@
+{
+  "comment": "Language-neutral fixtures. Both the Python and the JavaScript side read this file, so neither can drift from the other's idea of what was written.",
+
+  "embedding": {
+    "dims": 8,
+    "comment": "Deterministic bucket embedding, implemented identically in both languages: bucket = codepoint % dims, then L2 normalise."
+  },
+
+  "checkpoints": {
+    "threads": [
+      {
+        "id": "parity-basic",
+        "checkpoint_ns": "",
+        "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
+        "channel_values": {
+          "plain": "hello",
+          "number": 42,
+          "float": 1.5,
+          "bool_true": true,
+          "bool_false": false,
+          "null_value": null,
+          "nested": { "a": [1, 2, 3], "b": { "c": "d" } },
+          "unicode": "héllo wörld こんにちは 🙂",
+          "empty_string": "",
+          "empty_object": {},
+          "empty_array": []
+        },
+        "metadata": {
+          "source": "parity",
+          "step": 1,
+          "writes": null,
+          "nested": { "tenant": "acme", "flags": ["x", "y"] },
+          "unicode": "naïve café",
+          "big_int": 9007199254740991
+        }
+      },
+      {
+        "id": "parity-namespaced",
+        "checkpoint_ns": "child|branch",
+        "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b876",
+        "channel_values": { "scoped": "in a namespace" },
+        "metadata": { "source": "parity", "step": 2 }
+      },
+      {
+        "id": "parity-lineage",
+        "checkpoint_ns": "",
+        "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b880",
+        "parent_checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
+        "channel_values": { "plain": "second revision" },
+        "metadata": { "source": "parity", "step": 3 }
+      }
+    ],
+
+    "writes": [
+      {
+        "thread_id": "parity-basic",
+        "checkpoint_ns": "",
+        "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
+        "task_id": "task-a",
+        "task_path": "",
+        "writes": [
+          ["messages", "first value"],
+          ["messages", "second value"],
+          ["counter", 7]
+        ]
+      },
+      {
+        "thread_id": "parity-basic",
+        "checkpoint_ns": "",
+        "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
+        "task_id": "task-b",
+        "task_path": "~branch",
+        "writes": [["messages", "from another task"]]
+      },
+      {
+        "thread_id": "parity-basic",
+        "checkpoint_ns": "",
+        "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
+        "task_id": "task-error",
+        "task_path": "",
+        "writes": [["__error__", "boom"]]
+      }
+    ]
+  },
+
+  "store": {
+    "items": [
+      {
+        "namespace": ["parity", "basic"],
+        "key": "simple",
+        "value": { "text": "apple fruit", "score": 10, "color": "red" }
+      },
+      {
+        "namespace": ["parity", "basic"],
+        "key": "second",
+        "value": { "text": "car vehicle", "score": 3, "color": "blue" }
+      },
+      {
+        "namespace": ["parity", "types"],
+        "key": "all-types",
+        "value": {
+          "string": "text",
+          "int": 5,
+          "float": 2.5,
+          "zero": 0,
+          "bool_true": true,
+          "bool_false": false,
+          "null_value": null,
+          "array": [1, "two", false, null, { "deep": true }],
+          "object": { "nested": { "deeper": [1, 2] } },
+          "empty_string": "",
+          "empty_object": {},
+          "empty_array": []
+        }
+      },
+      {
+        "namespace": ["parity", "unicode"],
+        "key": "unicode-key-héllo-🙂",
+        "value": { "text": "naïve café こんにちは", "emoji": "🙂🚀" }
+      },
+      {
+        "namespace": ["parity", "deep", "a", "b", "c"],
+        "key": "deep",
+        "value": { "text": "deeply nested namespace" }
+      }
+    ],
+
+    "filters": [
+      { "name": "eq-string", "filter": { "color": "red" }, "expect_keys": ["simple"] },
+      { "name": "eq-number", "filter": { "score": 10 }, "expect_keys": ["simple"] },
+      { "name": "gt", "filter": { "score": { "$gt": 5 } }, "expect_keys": ["simple"] },
+      { "name": "lte", "filter": { "score": { "$lte": 3 } }, "expect_keys": ["second"] },
+      { "name": "no-match", "filter": { "color": "chartreuse" }, "expect_keys": [] }
+    ],
+
+    "namespace_prefixes": [
+      { "prefix": ["parity", "basic"], "expect_keys": ["second", "simple"] },
+      { "prefix": ["parity", "deep"], "expect_keys": ["deep"] },
+      { "prefix": ["parity", "missing"], "expect_keys": [] }
+    ]
+  },
+
+  "vector_store": {
+    "items": [
+      {
+        "namespace": ["parity", "vectors"],
+        "key": "fruit",
+        "value": { "text": "apple banana fruit" }
+      },
+      {
+        "namespace": ["parity", "vectors"],
+        "key": "vehicle",
+        "value": { "text": "car truck vehicle" }
+      },
+      {
+        "namespace": ["parity", "vectors"],
+        "key": "unindexed",
+        "value": { "text": "apple banana fruit" },
+        "index": false
+      }
+    ],
+    "queries": [
+      { "query": "apple banana fruit", "expect_first": "fruit" },
+      { "query": "car truck vehicle", "expect_first": "vehicle" }
+    ],
+    "comment": "The whole-document default (fields ['$']) is exercised separately so that get_text_at_path serialisation parity is covered, not just field extraction."
+  },
+
+  "known_divergences": {
+    "comment": "Behaviours that deliberately differ. Asserted so that an accidental change on either side is caught.",
+    "checkpoint_metadata_filter": "JS uses containment (like both Postgres savers); Python Oracle compares sub-documents for equality.",
+    "store_expired_reads": "JS hides expired items at read time (like PostgresStore); Python Oracle does not filter on expires_at.",
+    "namespace_prefix_match": "JS matches exact-or-prefix.'.'; Python binds '<prefix>%' and also matches sibling namespaces sharing the string prefix."
+  }
+}

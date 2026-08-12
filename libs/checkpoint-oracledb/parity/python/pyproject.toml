@@ -1,0 +1,18 @@
+[project]
+name = "oracle-langgraph-parity"
+version = "0.1.0"
+description = "Cross-language parity checks between langgraph-oracledb (Python) and @langchain/langgraph-checkpoint-oracledb (JavaScript)."
+requires-python = ">=3.10"
+dependencies = [
+    "langgraph-oracledb>=1.0.1",
+    "oracledb>=2.5.0",
+    "pytest>=8.0.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["."]
+python_files = ["test_*.py"]
+addopts = "-q --tb=short"
+
+[tool.uv]
+package = false

@@ -7,7 +7,7 @@ export default defineConfig((env) => {
       hideSkippedTests: true,
       globals: true,
       testTimeout: 30_000,
-      exclude: ["**/*.int.test.ts", ...configDefaults.exclude],
+      exclude: ["**/*.int.test.ts", "parity/**", ...configDefaults.exclude],
       passWithNoTests: true,
     },
   };
@@ -18,7 +18,7 @@ export default defineConfig((env) => {
         ...common.test,
         minWorkers: 0.5,
         testTimeout: 100_000,
-        exclude: configDefaults.exclude,
+        exclude: ["parity/**", ...configDefaults.exclude],
         include: ["**/*.int.test.ts"],
         name: "int",
         environment: "node",
