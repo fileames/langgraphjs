@@ -13,6 +13,8 @@ import os
 from pathlib import Path
 from typing import Any, Iterable
 
+from langchain_core.embeddings import Embeddings
+
 FIXTURES = json.loads(
     (Path(__file__).resolve().parent.parent / "fixtures" / "cases.json").read_text(
         encoding="utf-8"
@@ -82,16 +84,21 @@ def embed(text: str) -> list[float]:
     return [value / norm for value in vector]
 
 
-class ParityEmbeddings:
-    """Minimal LangChain-compatible embeddings wrapper around `embed`."""
+class ParityEmbeddings(Embeddings):
+    """Deterministic embeddings for the parity run.
 
-    def embed_documents(self, texts: Iterable[str]) -> list[list[float]]:
+    Must subclass `Embeddings`: `ensure_embeddings` returns an instance as-is
+    only when `isinstance(embed, Embeddings)` holds, and otherwise wraps it in
+    `EmbeddingsLambda`, which then tries to *call* it.
+    """
+
+    def embed_documents(self, texts: list[str]) -> list[list[float]]:
         return [embed(text) for text in texts]
 
     def embed_query(self, text: str) -> list[float]:
         return embed(text)
 
-    async def aembed_documents(self, texts: Iterable[str]) -> list[list[float]]:
+    async def aembed_documents(self, texts: list[str]) -> list[list[float]]:
         return self.embed_documents(texts)
 
     async def aembed_query(self, text: str) -> list[float]:
