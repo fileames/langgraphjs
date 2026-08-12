@@ -81,22 +81,24 @@ async function writeCheckpoints(): Promise<void> {
       report("wrote pending writes", write.task_id);
     }
 
-    // Binary payloads exercise the BLOB path in both languages.
+    // Binary payloads exercise the BLOB path in both languages. The bytes
+    // come from the fixtures so both writers send exactly the same thing.
+    const binary = FIXTURES.checkpoints.binary;
     const binaryValues = {
-      bytes: new Uint8Array([0, 1, 2, 254, 255]),
+      bytes: new Uint8Array(binary.bytes),
       empty_bytes: new Uint8Array(),
-      large_text: "x".repeat(200_000),
+      large_text: binary.large_text_char.repeat(binary.large_text_length),
     };
     await saver.put(
       {
         configurable: {
-          thread_id: threadId(DIRECTION, "parity-binary"),
+          thread_id: threadId(DIRECTION, binary.thread_id),
           checkpoint_ns: "",
         },
       },
       {
         v: 4,
-        id: "1ef4f797-8335-6428-8001-8a1503f9b899",
+        id: binary.checkpoint_id,
         ts: "2024-07-31T20:14:19.804150+00:00",
         channel_values: binaryValues,
         channel_versions: channelVersions(binaryValues),

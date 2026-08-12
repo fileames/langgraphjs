@@ -14,7 +14,6 @@ from langgraph_oracledb.store.oracle import OracleStore
 from common import (
     FIXTURES,
     as_tuple,
-    checkpoint_suffix,
     conn_string,
     index_config,
     report,
@@ -75,21 +74,24 @@ def write_checkpoints() -> None:
             )
             report("wrote pending writes", write["task_id"])
 
-        # Binary payloads exercise the BLOB path in both languages.
+        # Binary payloads exercise the BLOB path in both languages. The bytes
+        # come from the fixtures so both writers send exactly the same thing.
+        binary = FIXTURES["checkpoints"]["binary"]
         binary_config = {
             "configurable": {
-                "thread_id": thread_id(DIRECTION, "parity-binary"),
+                "thread_id": thread_id(DIRECTION, binary["thread_id"]),
                 "checkpoint_ns": "",
             }
         }
         binary_checkpoint = {
             "v": 4,
-            "id": "1ef4f797-8335-6428-8001-8a1503f9b899",
+            "id": binary["checkpoint_id"],
             "ts": "2024-07-31T20:14:19.804150+00:00",
             "channel_values": {
-                "bytes": b"\x00\x01\x02\xfe\xff binary payload",
+                "bytes": bytes(binary["bytes"]),
                 "empty_bytes": b"",
-                "large_text": "x" * 200_000,
+                "large_text": binary["large_text_char"]
+                * binary["large_text_length"],
             },
             "channel_versions": {
                 "bytes": "00000000000000000000000000000001.0",

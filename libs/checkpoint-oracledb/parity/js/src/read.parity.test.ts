@@ -140,14 +140,17 @@ describe("checkpoints written by Python", () => {
   });
 
   test("round-trips binary channel values", async () => {
+    const binary = FIXTURES.checkpoints.binary;
     const tuple = await saver.getTuple(
-      configFor("parity-binary", "", "1ef4f797-8335-6428-8001-8a1503f9b899")
+      configFor(binary.thread_id, "", binary.checkpoint_id)
     );
     expect(tuple).toBeDefined();
     const values = tuple!.checkpoint.channel_values;
-    expect(Array.from(toBytes(values.bytes))).toEqual([0, 1, 2, 254, 255]);
+    expect(Array.from(toBytes(values.bytes))).toEqual(binary.bytes);
     expect(toBytes(values.empty_bytes).byteLength).toBe(0);
-    expect(values.large_text).toBe("x".repeat(200_000));
+    expect(values.large_text).toBe(
+      binary.large_text_char.repeat(binary.large_text_length)
+    );
   });
 
   test("lists checkpoints written by Python", async () => {

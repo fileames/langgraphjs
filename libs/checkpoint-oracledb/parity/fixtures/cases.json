@@ -121,7 +121,28 @@
           ]
         ]
       }
-    ]
+    ],
+    "binary": {
+      "comment": "Byte values, not text: covers NUL, high bytes, and printable ASCII in one payload.",
+      "thread_id": "parity-binary",
+      "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b899",
+      "bytes": [
+        0,
+        1,
+        2,
+        254,
+        255,
+        32,
+        98,
+        105,
+        110,
+        97,
+        114,
+        121
+      ],
+      "large_text_char": "x",
+      "large_text_length": 200000
+    }
   },
   "store": {
     "items": [

@@ -30,6 +30,13 @@ export interface Fixtures {
       task_path: string;
       writes: Array<[string, unknown]>;
     }>;
+    binary: {
+      thread_id: string;
+      checkpoint_id: string;
+      bytes: number[];
+      large_text_char: string;
+      large_text_length: number;
+    };
   };
   store: {
     items: Array<{

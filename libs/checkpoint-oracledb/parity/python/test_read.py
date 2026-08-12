@@ -126,14 +126,17 @@ def test_pending_writes_round_trip(saver):
 
 
 def test_binary_channel_values_round_trip(saver):
+    binary = FIXTURES["checkpoints"]["binary"]
     tuple_ = saver.get_tuple(
-        config_for("parity-binary", "", "1ef4f797-8335-6428-8001-8a1503f9b899")
+        config_for(binary["thread_id"], "", binary["checkpoint_id"])
     )
     assert tuple_ is not None
     values = tuple_.checkpoint["channel_values"]
-    assert values["bytes"] == b"\x00\x01\x02\xfe\xff binary payload"
+    assert list(values["bytes"]) == binary["bytes"]
     assert values["empty_bytes"] == b""
-    assert values["large_text"] == "x" * 200_000
+    assert values["large_text"] == (
+        binary["large_text_char"] * binary["large_text_length"]
+    )
 
 
 def test_list_returns_written_checkpoints(saver):
