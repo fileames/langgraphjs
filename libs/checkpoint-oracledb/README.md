@@ -188,7 +188,56 @@ const results = await store.search(["memories", "user-1"], {
 });
 ```
 
-VECTOR indexes are managed explicitly:
+### Vector index type, distance metric, and accuracy
+
+`index.index_type` and `index.accuracy` mirror the Python `langgraph-oracledb`
+options, down to the property names, because the same values are hashed into
+the table suffix and stored in the shared `STORE_CONFIGS` table:
+
+```ts
+const store = new OracleStore({
+  connection: oracleConnection,
+  index: {
+    dims: 1536,
+    embeddings: myEmbeddings,
+    fields: ["text"],
+    accuracy: 95,
+    index_type: {
+      type: "hnsw", // or "ivf"
+      neighbors: 16,
+      efconstruction: 200,
+      distance_metric: "COSINE", // or "EUCLIDEAN" / "DOT"
+    },
+  },
+});
+```
+
+| Option | Applies to | Range |
+| --- | --- | --- |
+| `accuracy` | both | 1-100 |
+| `distance_metric` | both | `COSINE`, `EUCLIDEAN`, `DOT` |
+| `neighbors` | `hnsw` | 2-2048 |
+| `efconstruction` | `hnsw` | 1-65535 |
+| `neighbor_partitions` | `ivf` | 1-10000000 |
+| `samples_per_partition` | `ivf` | 1 or more |
+| `min_vectors_per_partition` | `ivf` | 0 or more |
+
+Every value is validated when the store is constructed, before any statement
+is built. Unknown `index_type` keys are rejected rather than ignored.
+
+`setup()` creates the matching VECTOR index and records it as vector migration
+`1`, the same as Python does, so a store is queryable through its index
+straight after the first use. An HNSW index requires a database with a vector
+memory area (`VECTOR_MEMORY_SIZE`); IVF does not.
+
+Because the index configuration is part of the derived table suffix, two
+stores with different index settings get their own isolated tables. When a
+`tableSuffix` is given explicitly, `setup()` compares the configuration with
+the one registered in `STORE_CONFIGS` and fails on a dimension, distance,
+accuracy, or index parameter mismatch instead of returning wrongly ranked
+rows.
+
+Additional VECTOR indexes can also be managed explicitly:
 
 ```ts
 await store.createVectorIndex({
@@ -227,13 +276,11 @@ VECTOR_MIGRATIONS_<SUFFIX>
 ```
 
 Without an index configuration the default suffix is `novec`. With an index
-configuration it is derived deterministically from dimensions and fields, as
-in Python. Specify the same suffix explicitly when applications in both
-languages must share one Store. Empty keys are rejected because Oracle treats
-an empty string as `NULL` and the shared key column is `NOT NULL`.
-JavaScript currently supports `COSINE` vector distance; setup rejects a shared
-Python Store configured with another distance instead of returning incorrect
-rankings.
+configuration it is derived deterministically from dimensions, fields, and
+index parameters, as in Python. Specify the same suffix explicitly when
+applications in both languages must share one Store. Empty keys are rejected
+because Oracle treats an empty string as `NULL` and the shared key column is
+`NOT NULL`.
 
 Remove checkpoint data for one thread with:
 

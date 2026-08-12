@@ -11,7 +11,8 @@ import {
   type SearchItem,
 } from "@langchain/langgraph-checkpoint";
 
-import { OracleStore } from "../store/index.js";
+import { OracleStore, type OracleStoreOptions } from "../store/index.js";
+import type { OracleIndexConfig } from "../store/index-config.js";
 import { encodeStoreKey, namespacePath } from "../store/namespace.js";
 
 config();
@@ -53,7 +54,93 @@ async function dropStoreTables(prefix: string): Promise<void> {
         if (code !== 942) throw error;
       }
     }
+    try {
+      await connection.execute(
+        `DELETE FROM STORE_CONFIGS WHERE table_suffix = :tableSuffix`,
+        { tableSuffix: prefix }
+      );
+    } catch (error) {
+      const code = (error as { errorNum?: number }).errorNum;
+      if (code !== 942) throw error;
+    }
     await connection.commit();
+  } finally {
+    await connection.close();
+  }
+}
+
+type StoreConfigRecord = {
+  detectedDims: number;
+  distanceType: string;
+  indexParams: unknown;
+  embedFields: string;
+};
+
+async function readStoreConfig(
+  tableSuffix: string
+): Promise<StoreConfigRecord | null> {
+  const connection = await oracledb.getConnection(oracleConnection);
+  try {
+    const result = await connection.execute<{
+      DETECTED_DIMS: number;
+      DISTANCE_TYPE: string;
+      INDEX_PARAMS: unknown;
+      EMBED_FIELDS: string;
+    }>(
+      `SELECT detected_dims, distance_type, index_params, embed_fields
+FROM STORE_CONFIGS
+WHERE table_suffix = :tableSuffix`,
+      { tableSuffix },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    const row = result.rows?.[0];
+    return row
+      ? {
+          detectedDims: Number(row.DETECTED_DIMS),
+          distanceType: row.DISTANCE_TYPE,
+          indexParams:
+            typeof row.INDEX_PARAMS === "string"
+              ? JSON.parse(row.INDEX_PARAMS)
+              : row.INDEX_PARAMS,
+          embedFields: row.EMBED_FIELDS,
+        }
+      : null;
+  } finally {
+    await connection.close();
+  }
+}
+
+async function readVectorMigrationVersions(
+  prefix: string
+): Promise<number[]> {
+  const connection = await oracledb.getConnection(oracleConnection);
+  try {
+    const result = await connection.execute<{ V: number }>(
+      `SELECT v FROM VECTOR_MIGRATIONS_${prefix.toUpperCase()} ORDER BY v`,
+      {},
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    return (result.rows ?? []).map((row) => Number(row.V));
+  } finally {
+    await connection.close();
+  }
+}
+
+async function storeVectorIndexNames(prefix: string): Promise<string[]> {
+  const connection = await oracledb.getConnection(oracleConnection);
+  try {
+    const result = await connection.execute<{ INDEX_NAME: string }>(
+      `SELECT i.index_name
+FROM user_indexes i
+JOIN user_ind_columns c
+  ON c.index_name = i.index_name
+WHERE i.table_name = :tableName
+  AND c.column_name = 'EMBEDDING'
+ORDER BY i.index_name`,
+      { tableName: `STORE_VECTORS_${prefix.toUpperCase()}` },
+      { outFormat: oracledb.OUT_FORMAT_OBJECT }
+    );
+    return (result.rows ?? []).map((row) => row.INDEX_NAME);
   } finally {
     await connection.close();
   }
@@ -200,26 +287,37 @@ function skipIfHnswMemoryUnavailable(
   context: TestContext,
   error: unknown
 ): void {
-  if (isOracleError(error, 51962)) {
-    context.skip("Oracle VECTOR memory area is unavailable for HNSW indexes.");
+  // Setup wraps this driver error to explain the fix, so check the chain.
+  for (let current = error; current; current = (current as { cause?: unknown }).cause) {
+    if (isOracleError(current, 51962)) {
+      context.skip(
+        "Oracle VECTOR memory area is unavailable for HNSW indexes."
+      );
+    }
   }
 }
 
 async function withStore<T>(
   callback: (store: OracleStore, prefix: string) => Promise<T>,
-  options: Omit<
-    ConstructorParameters<typeof OracleStore>[0],
-    "connection" | "tableSuffix"
-  > = {}
+  options: Omit<OracleStoreOptions, "connection" | "tableSuffix"> & {
+    context?: TestContext;
+  } = {}
 ): Promise<T> {
+  const { context, ...storeOptions } = options;
   const prefix = uniquePrefix();
   const store = new OracleStore({
     connection: oracleConnection,
     tableSuffix: prefix,
-    ...options,
+    ...storeOptions,
   });
   try {
     return await callback(store, prefix);
+  } catch (error) {
+    // Setting up a store with an HNSW index now creates that index, which
+    // needs a vector memory area, so give the whole test the same skip the
+    // explicit index tests use.
+    if (context) skipIfHnswMemoryUnavailable(context, error);
+    throw error;
   } finally {
     await store.stop();
     await dropStoreTables(prefix);
@@ -265,6 +363,10 @@ function vectorBindStrategy(
 function forceStringVectorBinds(store: OracleStore): void {
   (store as unknown as StoreVectorBindStrategyProbe).vectorBindStrategy =
     "string";
+}
+
+function derivedTableSuffix(store: OracleStore): string {
+  return (store as unknown as { tableSuffix: string }).tableSuffix;
 }
 
 describeIfOracle("OracleStore BaseStore contract", () => {
@@ -1996,6 +2098,371 @@ describeIfOracle("OracleStore vector search", () => {
       await store.stop();
       await mismatchedStore.stop();
       await dropStoreTables(prefix);
+    }
+  });
+});
+
+describeIfOracle("OracleStore vector index configuration", () => {
+  const ivfIndexConfig: OracleIndexConfig = {
+    ...indexConfig,
+    index_type: { type: "ivf", neighbor_partitions: 1 },
+  };
+
+  test("creates the configured vector index during setup", async (context) => {
+    await withStore(
+      async (store, prefix) => {
+        await store.put(["vectors"], "doc", { text: "apple fruit" });
+
+        const indexes = await storeVectorIndexNames(prefix);
+        expect(indexes).toHaveLength(1);
+        expect(indexes[0]).toMatch(
+          new RegExp(`^STORE_VECTORS_${prefix.toUpperCase()}IDX_[0-9A-F]{6}$`)
+        );
+        await expect(readVectorMigrationVersions(prefix)).resolves.toEqual([
+          0, 1,
+        ]);
+
+        const listed = await store.listVectorIndexes();
+        expect(listed.map((index) => index.name)).toEqual(indexes);
+        expect(listed[0].appearsOnStoreVectorEmbedding).toBe(true);
+      },
+      { index: indexConfig, context }
+    );
+  });
+
+  test("creates an IVF index from the store configuration", async () => {
+    await withStore(
+      async (store, prefix) => {
+        await store.put(["vectors"], "doc", { text: "apple fruit" });
+
+        await expect(storeVectorIndexNames(prefix)).resolves.toHaveLength(1);
+        await expect(readVectorMigrationVersions(prefix)).resolves.toEqual([
+          0, 1,
+        ]);
+      },
+      { index: ivfIndexConfig }
+    );
+  });
+
+  test("applies target accuracy and tuning parameters", async () => {
+    await withStore(
+      async (store, prefix) => {
+        await store.put(["vectors"], "doc", { text: "apple fruit" });
+        await expect(storeVectorIndexNames(prefix)).resolves.toHaveLength(1);
+      },
+      {
+        index: {
+          ...indexConfig,
+          accuracy: 90,
+          index_type: {
+            type: "ivf",
+            neighbor_partitions: 1,
+            samples_per_partition: 2,
+            min_vectors_per_partition: 0,
+          },
+        },
+      }
+    );
+  });
+
+  test("does not recreate the index on a second setup", async () => {
+    const prefix = uniquePrefix();
+    const options = {
+      connection: oracleConnection,
+      tableSuffix: prefix,
+      index: ivfIndexConfig,
+    };
+    const first = new OracleStore(options);
+    const second = new OracleStore(options);
+
+    try {
+      await first.start();
+      const afterFirst = await storeVectorIndexNames(prefix);
+      await second.start();
+      const afterSecond = await storeVectorIndexNames(prefix);
+
+      expect(afterFirst).toHaveLength(1);
+      expect(afterSecond).toEqual(afterFirst);
+      await expect(readVectorMigrationVersions(prefix)).resolves.toEqual([
+        0, 1,
+      ]);
+    } finally {
+      await first.stop();
+      await second.stop();
+      await dropStoreTables(prefix);
+    }
+  });
+
+  test("ranks results with EUCLIDEAN distance", async () => {
+    await withStore(
+      async (store) => {
+        await store.put(["vectors"], "fruit", { text: "apple fruit" });
+        await store.put(["vectors"], "vehicle", { text: "car vehicle" });
+
+        const results = await store.search(["vectors"], {
+          query: "apple",
+          limit: 2,
+        });
+
+        expect(results.map((item) => item.key)).toEqual(["fruit", "vehicle"]);
+        // Euclidean scores are negated distances: identical vectors score 0.
+        expect(results[0].score).toBeCloseTo(0, 5);
+        expect(results[1].score).toBeLessThan(results[0].score!);
+      },
+      {
+        index: {
+          ...indexConfig,
+          index_type: {
+            type: "ivf",
+            neighbor_partitions: 1,
+            distance_metric: "EUCLIDEAN",
+          },
+        },
+      }
+    );
+  });
+
+  test("ranks results with DOT distance", async () => {
+    await withStore(
+      async (store) => {
+        await store.put(["vectors"], "fruit", { text: "apple fruit" });
+        await store.put(["vectors"], "vehicle", { text: "car vehicle" });
+
+        const results = await store.search(["vectors"], {
+          query: "apple",
+          limit: 2,
+        });
+
+        expect(results.map((item) => item.key)).toEqual(["fruit", "vehicle"]);
+        // DOT scores are inner products: 1 for the identical one-hot vector.
+        expect(results[0].score).toBeCloseTo(1, 5);
+        expect(results[1].score).toBeCloseTo(0, 5);
+      },
+      {
+        index: {
+          ...indexConfig,
+          index_type: {
+            type: "ivf",
+            neighbor_partitions: 1,
+            distance_metric: "DOT",
+          },
+        },
+      }
+    );
+  });
+
+  test("still ranks with COSINE by default", async () => {
+    await withStore(
+      async (store) => {
+        await store.put(["vectors"], "fruit", { text: "apple fruit" });
+        await store.put(["vectors"], "vehicle", { text: "car vehicle" });
+
+        const results = await store.search(["vectors"], {
+          query: "apple",
+          limit: 2,
+        });
+
+        expect(results.map((item) => item.key)).toEqual(["fruit", "vehicle"]);
+        expect(results[0].score).toBeCloseTo(1, 5);
+        expect(results[1].score).toBeCloseTo(0, 5);
+      },
+      { index: ivfIndexConfig }
+    );
+  });
+
+  test("registers the configuration Python reads back", async () => {
+    await withStore(
+      async (store, prefix) => {
+        await store.put(["vectors"], "doc", { text: "apple fruit" });
+
+        await expect(readStoreConfig(prefix)).resolves.toEqual({
+          detectedDims: 3,
+          distanceType: "EUCLIDEAN",
+          indexParams: {
+            type: "ivf",
+            neighbor_partitions: 1,
+            distance_metric: "EUCLIDEAN",
+            accuracy: 90,
+          },
+          embedFields: "text",
+        });
+      },
+      {
+        index: {
+          ...indexConfig,
+          accuracy: 90,
+          index_type: {
+            type: "ivf",
+            neighbor_partitions: 1,
+            distance_metric: "EUCLIDEAN",
+          },
+        },
+      }
+    );
+  });
+
+  test("rejects a store whose configuration conflicts with the registered one", async () => {
+    const prefix = uniquePrefix();
+    const base = {
+      connection: oracleConnection,
+      tableSuffix: prefix,
+    };
+    const store = new OracleStore({ ...base, index: ivfIndexConfig });
+    const wrongDims = new OracleStore({
+      ...base,
+      index: { ...ivfIndexConfig, dims: 4 },
+    });
+    const wrongDistance = new OracleStore({
+      ...base,
+      index: {
+        ...ivfIndexConfig,
+        index_type: {
+          type: "ivf",
+          neighbor_partitions: 1,
+          distance_metric: "DOT",
+        },
+      },
+    });
+    const wrongParams = new OracleStore({
+      ...base,
+      index: {
+        ...ivfIndexConfig,
+        index_type: { type: "ivf", neighbor_partitions: 8 },
+      },
+    });
+    const wrongAccuracy = new OracleStore({
+      ...base,
+      index: { ...ivfIndexConfig, accuracy: 80 },
+    });
+
+    try {
+      await store.start();
+
+      await expect(wrongDims.start()).rejects.toThrow(
+        `Dimension mismatch for tableSuffix "${prefix}"`
+      );
+      await expect(wrongDistance.start()).rejects.toThrow(
+        `Distance type mismatch for tableSuffix "${prefix}"`
+      );
+      await expect(wrongParams.start()).rejects.toThrow(
+        `Index parameter mismatch for tableSuffix "${prefix}"`
+      );
+      await expect(wrongAccuracy.start()).rejects.toThrow(
+        `Index accuracy mismatch for tableSuffix "${prefix}"`
+      );
+    } finally {
+      for (const instance of [
+        store,
+        wrongDims,
+        wrongDistance,
+        wrongParams,
+        wrongAccuracy,
+      ]) {
+        await instance.stop();
+      }
+      await dropStoreTables(prefix);
+    }
+  });
+
+  test("accepts a store that repeats the registered configuration", async () => {
+    const prefix = uniquePrefix();
+    const options = {
+      connection: oracleConnection,
+      tableSuffix: prefix,
+      index: ivfIndexConfig,
+    };
+    const first = new OracleStore(options);
+    const second = new OracleStore(options);
+
+    try {
+      await first.start();
+      await first.put(["vectors"], "doc", { text: "apple fruit" });
+      await expect(second.start()).resolves.toBeUndefined();
+
+      const results = await second.search(["vectors"], { query: "apple" });
+      expect(results.map((item) => item.key)).toEqual(["doc"]);
+    } finally {
+      await first.stop();
+      await second.stop();
+      await dropStoreTables(prefix);
+    }
+  });
+
+  test("gives each index configuration its own derived tables", async () => {
+    const cosine = new OracleStore({
+      connection: oracleConnection,
+      index: ivfIndexConfig,
+    });
+    const dot = new OracleStore({
+      connection: oracleConnection,
+      index: {
+        ...ivfIndexConfig,
+        index_type: {
+          type: "ivf",
+          neighbor_partitions: 1,
+          distance_metric: "DOT",
+        },
+      },
+    });
+    const cosineSuffix = derivedTableSuffix(cosine);
+    const dotSuffix = derivedTableSuffix(dot);
+
+    expect(cosineSuffix).not.toBe(dotSuffix);
+
+    try {
+      await cosine.put(["vectors"], "doc", { text: "apple fruit" });
+      // The second configuration must not collide with the first, which is
+      // what a suffix that ignored index_type would do.
+      await dot.put(["vectors"], "doc", { text: "car vehicle" });
+
+      const cosineResults = await cosine.search(["vectors"], {
+        query: "apple",
+      });
+      expect(cosineResults[0].score).toBeCloseTo(1, 5);
+
+      await expect(readStoreConfig(cosineSuffix)).resolves.toMatchObject({
+        distanceType: "COSINE",
+      });
+      await expect(readStoreConfig(dotSuffix)).resolves.toMatchObject({
+        distanceType: "DOT",
+      });
+    } finally {
+      await cosine.stop();
+      await dot.stop();
+      await dropStoreTables(cosineSuffix);
+      await dropStoreTables(dotSuffix);
+    }
+  });
+
+  test("rejects index configurations before touching the database", async () => {
+    const invalidConfigs: Array<[Record<string, unknown>, string]> = [
+      [
+        { index_type: { type: "hnsw", neighbors: 1 } },
+        "index_type.neighbors must be between 2 and 2048",
+      ],
+      [
+        { index_type: { type: "hnsw", distance_metric: "MANHATTAN" } },
+        "distance_metric must be one of COSINE, EUCLIDEAN, DOT",
+      ],
+      [
+        { index_type: { type: "ivf", efconstruction: 2 } },
+        "index_type contains unsupported keys: efconstruction",
+      ],
+      [
+        { index_type: { type: "hnsw", neighbors: "8) --" } },
+        "index_type.neighbors must be an integer",
+      ],
+      [{ accuracy: 0 }, "index accuracy must be between 1 and 100"],
+    ];
+
+    for (const [overrides, message] of invalidConfigs) {
+      expect(
+        () =>
+          new OracleStore({
+            connection: oracleConnection,
+            index: { ...indexConfig, ...overrides },
+          })
+      ).toThrow(message);
     }
   });
 });

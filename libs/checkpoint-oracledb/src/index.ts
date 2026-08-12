@@ -17,6 +17,16 @@ export type {
   OracleHNSWVectorIndexOptions,
   OracleIVFVectorIndexOptions,
   OracleStoreOptions,
+  OracleStoreSearchOptions,
+  OracleStoreTTLConfig,
   OracleVectorIndexInfo,
   OracleVectorIndexOptions,
 } from "./store/index.js";
+export { ORACLE_VECTOR_DISTANCE_METRICS } from "./store/index-config.js";
+export type {
+  OracleHNSWIndexTypeConfig,
+  OracleIndexConfig,
+  OracleIndexTypeConfig,
+  OracleIVFIndexTypeConfig,
+  OracleVectorDistanceMetric,
+} from "./store/index-config.js";

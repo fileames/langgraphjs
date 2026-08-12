@@ -1,5 +1,4 @@
 // Copyright (c) 2026, Oracle and/or its affiliates.
-import { createHash } from "node:crypto";
 import oracledb from "oracledb";
 import {
   BaseStore,
@@ -9,7 +8,6 @@ import {
   type MatchCondition,
   type Operation,
   type OperationResults,
-  type IndexConfig,
   type PutOperation,
   type SearchItem,
   type SearchOperation,
@@ -39,7 +37,6 @@ import {
   getCreateVectorMigrationTableSQL,
 } from "./migrations.js";
 import {
-  ORACLE_VECTOR_MAX_DIMENSIONS,
   STORE_FIELD_PATH_MAX_BYTES,
   STORE_KEY_MAX_BYTES,
   STORE_NAMESPACE_PATH_MAX_BYTES,
@@ -48,6 +45,18 @@ import {
   VECTOR_STRING_BIND_MAX_BYTES,
 } from "./constants.js";
 import { generatedIdentifier, validateIdentifier } from "./identifiers.js";
+import {
+  assertStoredIndexConfigMatches,
+  createConfiguredVectorIndexSQL,
+  defaultTableSuffix,
+  distanceMetricSQL,
+  scoreFromDistanceSQL,
+  storeConfigDistanceType,
+  storeConfigEmbedFields,
+  storeConfigIndexParams,
+  validateOracleIndexConfig,
+  type OracleIndexConfig,
+} from "./index-config.js";
 import { getTextAtPath, jsonPath, jsonValueExpression } from "./json-path.js";
 import {
   decodeStoreKey,
@@ -74,7 +83,7 @@ export interface OracleStoreOptions {
   /** Shared suffix used by the Python and JavaScript Oracle Store tables. */
   tableSuffix?: string;
   ensureTable?: boolean;
-  index?: IndexConfig;
+  index?: OracleIndexConfig;
   /** Optional TTL behavior. Durations are expressed in minutes. */
   ttl?: OracleStoreTTLConfig;
 }
@@ -123,31 +132,6 @@ function validateTableSuffix(suffix: string): string {
     );
   }
   return suffix;
-}
-
-function pythonStyleJson(value: unknown): string {
-  if (Array.isArray(value)) {
-    return `[${value.map(pythonStyleJson).join(", ")}]`;
-  }
-  if (value !== null && typeof value === "object") {
-    return `{${Object.entries(value as Record<string, unknown>)
-      .sort(([left], [right]) => left.localeCompare(right))
-      .map(
-        ([key, nested]) => `${JSON.stringify(key)}: ${pythonStyleJson(nested)}`
-      )
-      .join(", ")}}`;
-  }
-  return JSON.stringify(value);
-}
-
-function defaultTableSuffix(index: IndexConfig | undefined): string {
-  if (!index) return "novec";
-  const serialized = pythonStyleJson({
-    dims: index.dims,
-    fields: index.fields ?? ["$"],
-    index_params: { type: "hnsw" },
-  });
-  return createHash("sha256").update(serialized).digest("hex").slice(0, 6);
 }
 
 export type OracleVectorIndexOptions =
@@ -256,6 +240,15 @@ type SqlFilter = {
 type TableExistsRow = {
   TABLE_EXISTS: number;
   table_exists?: number;
+};
+
+type StoreConfigRow = {
+  DETECTED_DIMS?: number;
+  detected_dims?: number;
+  DISTANCE_TYPE?: string;
+  distance_type?: string;
+  INDEX_PARAMS?: unknown;
+  index_params?: unknown;
 };
 
 type NamespaceSqlFilter = {
@@ -377,15 +370,24 @@ function vectorIndexName(
 function validateVectorIndexOptions(
   options: OracleVectorIndexOptions
 ): OracleVectorIndexOptions {
-  if (
-    typeof options !== "object" ||
-    options === null ||
-    (options.type !== "HNSW" && options.type !== "IVF")
-  ) {
+  if (typeof options !== "object" || options === null) {
     throw new Error(
       'OracleStore vector index type must be either "HNSW" or "IVF".'
     );
   }
+
+  // Accept Python's lowercase spelling so one config style works everywhere.
+  const rawType = (options as { type?: unknown }).type;
+  const type =
+    typeof rawType === "string"
+      ? (rawType.toUpperCase() as OracleVectorIndexOptions["type"])
+      : rawType;
+  if (type !== "HNSW" && type !== "IVF") {
+    throw new Error(
+      'OracleStore vector index type must be either "HNSW" or "IVF".'
+    );
+  }
+  options = { ...options, type } as OracleVectorIndexOptions;
 
   validateIntegerRange("accuracy", options.accuracy, 1, 100);
   validatePositiveInteger("parallel", options.parallel);
@@ -415,7 +417,8 @@ function validateVectorIndexOptions(
 
 function createVectorIndexSQL(
   vectorTableName: string,
-  options: OracleVectorIndexOptions
+  options: OracleVectorIndexOptions,
+  distanceMetric: string
 ): string {
   const validated = validateVectorIndexOptions(options);
   const indexName = vectorIndexName(vectorTableName, validated);
@@ -434,7 +437,7 @@ function createVectorIndexSQL(
     return `CREATE VECTOR INDEX ${indexName}
 ON ${vectorTableName} (embedding)
 ORGANIZATION INMEMORY NEIGHBOR GRAPH
-DISTANCE COSINE${accuracy}${parameters}${parallel}`;
+DISTANCE ${distanceMetric}${accuracy}${parameters}${parallel}`;
   }
 
   const parameters =
@@ -444,7 +447,7 @@ DISTANCE COSINE${accuracy}${parameters}${parallel}`;
   return `CREATE VECTOR INDEX ${indexName}
 ON ${vectorTableName} (embedding)
 ORGANIZATION NEIGHBOR PARTITIONS
-DISTANCE COSINE${accuracy}${parameters}${parallel}`;
+DISTANCE ${distanceMetric}${accuracy}${parameters}${parallel}`;
 }
 
 function vectorIndexInfoFromRow(
@@ -597,41 +600,6 @@ function probeVector(dims: number): number[] {
   const vector = new Array(dims).fill(0) as number[];
   vector[0] = 1;
   return vector;
-}
-
-function validateVectorDimensions(dims: number): void {
-  if (
-    typeof dims !== "number" ||
-    !Number.isSafeInteger(dims) ||
-    dims <= 0 ||
-    dims > ORACLE_VECTOR_MAX_DIMENSIONS
-  ) {
-    throw new Error(
-      `OracleStore index dims must be an integer between 1 and ${ORACLE_VECTOR_MAX_DIMENSIONS}. Received ${String(
-        dims
-      )}.`
-    );
-  }
-}
-
-function validateIndexConfig(index: IndexConfig): void {
-  validateVectorDimensions(index.dims);
-  if (
-    !index.embeddings ||
-    typeof index.embeddings.embedDocuments !== "function" ||
-    typeof index.embeddings.embedQuery !== "function"
-  ) {
-    throw new Error(
-      "OracleStore index embeddings must provide embedDocuments and embedQuery methods."
-    );
-  }
-  if (
-    index.fields !== undefined &&
-    (!Array.isArray(index.fields) ||
-      !index.fields.every((field) => typeof field === "string"))
-  ) {
-    throw new Error("OracleStore index fields must be an array of strings.");
-  }
 }
 
 function stringifyStoreValue(value: unknown): string {
@@ -895,7 +863,14 @@ export class OracleStore extends BaseStore {
 
   private readonly ensureTable: boolean;
 
-  private readonly indexConfig?: IndexConfig;
+  private readonly indexConfig?: OracleIndexConfig;
+
+  /**
+   * Only a caller-supplied suffix is validated against `STORE_CONFIGS`; a
+   * derived suffix already encodes the configuration. Mirrors Python's
+   * `_needs_validation`.
+   */
+  private readonly needsConfigValidation: boolean;
 
   private readonly ttlConfig?: OracleStoreTTLConfig;
 
@@ -914,10 +889,15 @@ export class OracleStore extends BaseStore {
     this.pool = options.pool;
     this.connectionOptions = options.connection;
     this.ownsPool = options.pool === undefined;
+    // Validate before deriving the suffix: the suffix is a hash of these very
+    // values, so an unchecked configuration must never reach it.
+    if (options.index) validateOracleIndexConfig(options.index);
     const explicitSuffix = options.tableSuffix;
     this.tableSuffix = explicitSuffix
       ? validateTableSuffix(explicitSuffix)
       : defaultTableSuffix(options.index);
+    this.needsConfigValidation =
+      explicitSuffix !== undefined && options.index !== undefined;
     this.tableName = validateIdentifier(`STORE_${this.tableSuffix}`);
     this.vectorTableName = validateIdentifier(
       `STORE_VECTORS_${this.tableSuffix}`
@@ -929,7 +909,6 @@ export class OracleStore extends BaseStore {
       `VECTOR_MIGRATIONS_${this.tableSuffix}`
     );
     this.ensureTable = options.ensureTable ?? true;
-    if (options.index) validateIndexConfig(options.index);
     this.indexConfig = options.index;
     validateTtlMinutes("OracleStore ttl.defaultTtl", options.ttl?.defaultTtl);
     validateTtlMinutes(
@@ -1150,7 +1129,11 @@ WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP`
       );
     }
 
-    const sql = createVectorIndexSQL(this.vectorTableName, options);
+    const sql = createVectorIndexSQL(
+      this.vectorTableName,
+      options,
+      distanceMetricSQL(this.indexConfig)
+    );
     await this.setup();
     await this.withConnection(async (connection) => {
       await connection.execute(sql);
@@ -1194,6 +1177,15 @@ WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP`
 
   private async doSetup(): Promise<void> {
     await this.ensurePool();
+
+    // Runs before any DDL so an incompatible configuration fails without
+    // leaving half-created tables behind, and runs even when this store does
+    // not own the schema, which is when a mismatch is most likely.
+    if (this.indexConfig && this.needsConfigValidation) {
+      await this.withConnection((connection) =>
+        this.validatePersistedStoreConfig(connection)
+      );
+    }
 
     if (this.ensureTable) {
       await this.withConnection(async (connection) => {
@@ -1297,8 +1289,16 @@ WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP`
                 this.vectorMigrationTableName
               );
             }
+            if (vectorVersion < 1) {
+              await this.createConfiguredVectorIndex(connection);
+              await this.insertMigration(
+                connection,
+                1,
+                this.vectorMigrationTableName
+              );
+            }
             await this.validateVectorTableDimensions(connection);
-            await this.validatePersistedVectorDistance(connection);
+            await this.registerStoreConfig(connection);
           }
 
           await connection.commit();
@@ -1441,25 +1441,108 @@ WHERE prefix = :namespacePath AND key = :key AND field_name = :fieldPath`,
     }
   }
 
-  private async validatePersistedVectorDistance(
+  /**
+   * Create the vector index described by the index configuration, as Python's
+   * second vector migration does.
+   */
+  private async createConfiguredVectorIndex(
     connection: Connection
   ): Promise<void> {
-    const result = await connection.execute<{
-      DISTANCE_TYPE: string;
-      distance_type?: string;
-    }>(
-      `SELECT distance_type
+    if (!this.indexConfig) return;
+
+    try {
+      await this.executeCreate(
+        connection,
+        createConfiguredVectorIndexSQL(this.vectorTableName, this.indexConfig)
+      );
+    } catch (error) {
+      // ORA-51962: the database has no vector memory area, which an HNSW index
+      // requires. IVF indexes work without one.
+      if (!isOracleError(error, 51962)) throw error;
+      const wrapped = new Error(
+        `OracleStore could not create the HNSW vector index on ${this.vectorTableName} because this database has no vector memory area. Set VECTOR_MEMORY_SIZE, or configure index.index_type = { type: "ivf" }.`
+      );
+      (wrapped as { cause?: unknown }).cause = error;
+      throw wrapped;
+    }
+  }
+
+  /**
+   * Compare this store's index configuration with the row a previous run (in
+   * either language) registered for the same suffix. Mirrors Python
+   * `_validate_configuration`, including its tolerance of a missing table.
+   */
+  private async validatePersistedStoreConfig(
+    connection: Connection
+  ): Promise<void> {
+    if (!this.indexConfig || !this.needsConfigValidation) return;
+
+    let result;
+    try {
+      result = await connection.execute<StoreConfigRow>(
+        `SELECT detected_dims, distance_type, index_params
 FROM STORE_CONFIGS
 WHERE table_suffix = :tableSuffix`,
-      { tableSuffix: this.tableSuffix },
-      { outFormat: oracledb.OUT_FORMAT_OBJECT }
-    );
-    const row = result.rows?.[0];
-    const distance = row?.DISTANCE_TYPE ?? row?.distance_type;
-    if (distance && distance.toUpperCase() !== "COSINE") {
-      throw new Error(
-        `OracleStore tableSuffix "${this.tableSuffix}" uses ${distance} vector distance, but this JavaScript Store currently supports COSINE only.`
+        { tableSuffix: this.tableSuffix },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
       );
+    } catch (error) {
+      // ORA-00942: STORE_CONFIGS has not been created yet, so nothing to check.
+      if (!isOracleError(error, 942)) throw error;
+      return;
+    }
+
+    const row = result.rows?.[0];
+    if (!row) return;
+
+    assertStoredIndexConfigMatches(this.tableSuffix, this.indexConfig, {
+      detectedDims: Number(row.DETECTED_DIMS ?? row.detected_dims),
+      distanceType: String(row.DISTANCE_TYPE ?? row.distance_type ?? ""),
+      indexParams: row.INDEX_PARAMS ?? row.index_params,
+    });
+  }
+
+  /**
+   * Record this store's vector configuration so the other language's store can
+   * validate against it. Mirrors Python `_register_configuration`.
+   */
+  private async registerStoreConfig(connection: Connection): Promise<void> {
+    if (!this.indexConfig) return;
+
+    try {
+      await connection.execute(
+        `INSERT /*+ IGNORE_ROW_ON_DUPKEY_INDEX(STORE_CONFIGS (table_suffix)) */ INTO STORE_CONFIGS (
+  table_suffix,
+  detected_dims,
+  distance_type,
+  index_params,
+  embed_fields,
+  created_at,
+  last_used
+) VALUES (
+  :tableSuffix,
+  :detectedDims,
+  :distanceType,
+  :indexParams,
+  :embedFields,
+  CURRENT_TIMESTAMP,
+  CURRENT_TIMESTAMP
+)`,
+        {
+          tableSuffix: this.tableSuffix,
+          detectedDims: this.indexConfig.dims,
+          distanceType: storeConfigDistanceType(this.indexConfig),
+          indexParams: {
+            val: storeConfigIndexParams(this.indexConfig),
+            type: oracledb.DB_TYPE_JSON,
+          },
+          embedFields: storeConfigEmbedFields(this.indexConfig),
+        }
+      );
+    } catch (error) {
+      // ORA-00001: another session registered the same suffix first, which is
+      // the expected outcome for a deterministic suffix.
+      if (!isOracleError(error, 1)) throw error;
     }
   }
 
@@ -2139,6 +2222,11 @@ WHERE prefix = :namespacePath
         ? ""
         : "\nOFFSET :sqlOffset ROWS FETCH NEXT :fetchLimit ROWS ONLY";
 
+    // MIN(distance) is the closest vector for the item; the score transform is
+    // applied once in the outer query, as Python's get_distance_operator does.
+    const metric = distanceMetricSQL(this.indexConfig!);
+    const score = scoreFromDistanceSQL(this.indexConfig!, "sc.distance");
+
     return this.withConnection(async (connection) => {
       const strategy = await this.resolveVectorBindStrategy(connection, false);
       const result = await connection.execute<StoreRow>(
@@ -2146,16 +2234,13 @@ WHERE prefix = :namespacePath
   SELECT
     s.prefix,
     s.key,
-    MAX(
-      CASE
-        WHEN v.embedding IS NULL THEN NULL
-        ELSE 1 - VECTOR_DISTANCE(
-          v.embedding,
-          ${vectorExpression("queryVector", strategy)},
-          COSINE
-        )
-      END
-    ) AS score
+    MIN(
+      VECTOR_DISTANCE(
+        v.embedding,
+        ${vectorExpression("queryVector", strategy)},
+        ${metric}
+      )
+    ) AS distance
   FROM ${this.tableName} s
   LEFT JOIN ${this.vectorTableName} v
     ON v.prefix = s.prefix
@@ -2175,12 +2260,12 @@ SELECT
   s.value,
   s.created_at,
   s.updated_at,
-  sc.score
+  CASE WHEN sc.distance IS NULL THEN NULL ELSE ${score} END AS score
 FROM scored sc
 INNER JOIN ${this.tableName} s
   ON s.prefix = sc.prefix
   AND s.key = sc.key
-ORDER BY CASE WHEN sc.score IS NULL THEN 1 ELSE 0 END, sc.score DESC, key${fetchClause}`,
+ORDER BY CASE WHEN sc.distance IS NULL THEN 1 ELSE 0 END, sc.distance ASC, key${fetchClause}`,
         {
           queryVector:
             strategy === "native"

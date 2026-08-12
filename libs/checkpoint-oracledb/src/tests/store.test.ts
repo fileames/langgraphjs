@@ -17,11 +17,17 @@ class FakeSetupConnection {
 
   rolledBack = false;
 
+  readonly statements: string[] = [];
+
+  readonly registeredConfigs: Record<string, unknown>[] = [];
+
   constructor(
     private readonly options: {
       currentVersion: number;
       vectorVersion?: number;
       existingTables: Set<string>;
+      storeConfigRow?: Record<string, unknown>;
+      storeConfigsMissing?: boolean;
     }
   ) {}
 
@@ -29,7 +35,35 @@ class FakeSetupConnection {
     sql: string,
     binds: Record<string, unknown> = {}
   ): Promise<{ rows?: RowT[] }> {
-    if (/^\s*CREATE TABLE\b/i.test(sql)) {
+    this.statements.push(sql);
+    if (/^\s*CREATE\b/i.test(sql)) {
+      return {};
+    }
+    if (/INSERT\b[\s\S]*INTO STORE_CONFIGS/i.test(sql)) {
+      this.registeredConfigs.push(binds);
+      return {};
+    }
+    if (/FROM STORE_CONFIGS/i.test(sql)) {
+      if (this.options.storeConfigsMissing) {
+        throw Object.assign(new Error("ORA-00942: table does not exist"), {
+          errorNum: 942,
+        });
+      }
+      return {
+        rows: this.options.storeConfigRow
+          ? [this.options.storeConfigRow as RowT]
+          : [],
+      };
+    }
+    if (/^\s*INSERT INTO\b/i.test(sql)) {
+      return {};
+    }
+    // Statements issued by the vector dimension probe.
+    if (
+      /^\s*MERGE INTO\b/i.test(sql) ||
+      /^\s*DELETE FROM\b/i.test(sql) ||
+      /VECTOR_DISTANCE\(/i.test(sql)
+    ) {
       return {};
     }
     if (/SELECT v FROM/i.test(sql)) {
@@ -65,6 +99,17 @@ class FakeSetupConnection {
   }
 
   async close(): Promise<void> {}
+}
+
+function fakeEmbeddings() {
+  return {
+    async embedDocuments() {
+      return [];
+    },
+    async embedQuery() {
+      return [0, 0];
+    },
+  };
 }
 
 function fakePool(connection: FakeSetupConnection) {
@@ -159,18 +204,154 @@ describe("OracleStore runtime validation", () => {
     expect((store as unknown as StoreStateProbe).tableSuffix).toBe("403c86");
   });
 
-  test("rejects incompatible Python vector distance configuration", async () => {
-    const store = new OracleStore({ tableSuffix: "shared" });
-    const probe = store as unknown as StoreStateProbe;
-    const connection = {
-      async execute() {
-        return { rows: [{ DISTANCE_TYPE: "EUCLIDEAN" }] };
+  test("rejects a configuration that conflicts with the registered one", async () => {
+    const connection = new FakeSetupConnection({
+      currentVersion: 4,
+      existingTables: new Set(["STORE_SHARED", "STORE_VECTORS_SHARED"]),
+      storeConfigRow: {
+        DETECTED_DIMS: 2,
+        DISTANCE_TYPE: "EUCLIDEAN",
+        INDEX_PARAMS: { type: "hnsw", accuracy: null },
       },
-    };
+    });
+    const store = new OracleStore({
+      pool: fakePool(connection) as never,
+      tableSuffix: "SHARED",
+      index: { dims: 2, embeddings: fakeEmbeddings() as never },
+    });
 
-    await expect(
-      probe.validatePersistedVectorDistance(connection)
-    ).rejects.toThrow("currently supports COSINE only");
+    await expect(store.start()).rejects.toThrow(
+      'Distance type mismatch for tableSuffix "SHARED": existing EUCLIDEAN, provided COSINE'
+    );
+    // The conflict is detected before any table is created.
+    expect(
+      connection.statements.some((sql) => /^\s*CREATE\b/i.test(sql))
+    ).toBe(false);
+  });
+
+  test("skips registered-configuration checks for a derived suffix", async () => {
+    const connection = new FakeSetupConnection({
+      currentVersion: 4,
+      vectorVersion: 1,
+      existingTables: new Set(["STORE_403C86", "STORE_VECTORS_403C86"]),
+      storeConfigRow: {
+        DETECTED_DIMS: 99,
+        DISTANCE_TYPE: "EUCLIDEAN",
+        INDEX_PARAMS: { type: "ivf", accuracy: null },
+      },
+    });
+    const store = new OracleStore({
+      pool: fakePool(connection) as never,
+      index: { dims: 2, fields: ["text"], embeddings: fakeEmbeddings() as never },
+    });
+
+    // A derived suffix already encodes the configuration, so the row cannot
+    // disagree and is never read, exactly as in Python.
+    await expect(store.start()).resolves.toBeUndefined();
+    expect(
+      connection.statements.some((sql) => /FROM STORE_CONFIGS/i.test(sql))
+    ).toBe(false);
+  });
+
+  test("tolerates a missing STORE_CONFIGS table during validation", async () => {
+    const connection = new FakeSetupConnection({
+      currentVersion: 4,
+      vectorVersion: 1,
+      existingTables: new Set(["STORE_SHARED", "STORE_VECTORS_SHARED"]),
+      storeConfigsMissing: true,
+    });
+    const store = new OracleStore({
+      pool: fakePool(connection) as never,
+      tableSuffix: "SHARED",
+      index: { dims: 2, embeddings: fakeEmbeddings() as never },
+    });
+
+    await expect(store.start()).resolves.toBeUndefined();
+  });
+
+  test("registers the configuration Python expects to read", async () => {
+    const connection = new FakeSetupConnection({
+      currentVersion: 4,
+      vectorVersion: 1,
+      existingTables: new Set(["STORE_REGISTER", "STORE_VECTORS_REGISTER"]),
+    });
+    const store = new OracleStore({
+      pool: fakePool(connection) as never,
+      tableSuffix: "REGISTER",
+      index: {
+        dims: 2,
+        fields: ["text", "summary"],
+        embeddings: fakeEmbeddings() as never,
+        index_type: { type: "ivf", neighbor_partitions: 4 },
+        accuracy: 90,
+      },
+    });
+
+    await store.start();
+
+    expect(connection.registeredConfigs).toHaveLength(1);
+    const registered = connection.registeredConfigs[0];
+    expect(registered.tableSuffix).toBe("REGISTER");
+    expect(registered.detectedDims).toBe(2);
+    expect(registered.distanceType).toBe("COSINE");
+    expect(registered.embedFields).toBe("text,summary");
+    expect(
+      (registered.indexParams as { val: Record<string, unknown> }).val
+    ).toEqual({ type: "ivf", neighbor_partitions: 4, accuracy: 90 });
+  });
+
+  test("creates the configured vector index during setup", async () => {
+    const connection = new FakeSetupConnection({
+      currentVersion: 4,
+      vectorVersion: 0,
+      existingTables: new Set(["STORE_MKIDX", "STORE_VECTORS_MKIDX"]),
+    });
+    const store = new OracleStore({
+      pool: fakePool(connection) as never,
+      tableSuffix: "MKIDX",
+      index: {
+        dims: 2,
+        embeddings: fakeEmbeddings() as never,
+        index_type: {
+          type: "hnsw",
+          neighbors: 16,
+          efconstruction: 200,
+          distance_metric: "EUCLIDEAN",
+        },
+      },
+    });
+
+    await store.start();
+
+    const createIndex = connection.statements.find((sql) =>
+      /CREATE VECTOR INDEX/i.test(sql)
+    );
+    expect(createIndex).toBeDefined();
+    expect(createIndex).toContain("ON STORE_VECTORS_MKIDX (embedding)");
+    expect(createIndex).toContain("ORGANIZATION INMEMORY NEIGHBOR GRAPH");
+    expect(createIndex).toContain("DISTANCE EUCLIDEAN");
+    expect(createIndex).toContain(
+      "PARAMETERS (type HNSW, neighbors 16, efconstruction 200)"
+    );
+  });
+
+  test("does not recreate the vector index once its migration is recorded", async () => {
+    const connection = new FakeSetupConnection({
+      currentVersion: 4,
+      vectorVersion: 1,
+      existingTables: new Set(["STORE_HASIDX", "STORE_VECTORS_HASIDX"]),
+    });
+    const store = new OracleStore({
+      pool: fakePool(connection) as never,
+      tableSuffix: "HASIDX",
+      index: { dims: 2, embeddings: fakeEmbeddings() as never },
+    });
+
+    await store.start();
+
+    expect(
+      connection.statements.some((sql) => /CREATE VECTOR INDEX/i.test(sql))
+    ).toBe(false);
   });
 
   test("shares concurrent lazy pool creation", async () => {
