@@ -313,7 +313,11 @@ export function validateOracleIndexConfig(config: OracleIndexConfig): void {
  * non-ASCII is escaped the way `ensure_ascii=True` does. The store suffix is a
  * hash of this text, so any deviation silently points at different tables.
  */
-export function pythonJsonDumps(value: unknown): string {
+export function pythonJsonDumps(
+  value: unknown,
+  options: { ensureAscii?: boolean } = {}
+): string {
+  const { ensureAscii = true } = options;
   if (value === null || value === undefined) return "null";
   if (typeof value === "boolean") return value ? "true" : "false";
   if (typeof value === "number") {
@@ -324,9 +328,9 @@ export function pythonJsonDumps(value: unknown): string {
     }
     return String(value);
   }
-  if (typeof value === "string") return pythonJsonString(value);
+  if (typeof value === "string") return pythonJsonString(value, ensureAscii);
   if (Array.isArray(value)) {
-    return `[${value.map(pythonJsonDumps).join(", ")}]`;
+    return `[${value.map((item) => pythonJsonDumps(item, options)).join(", ")}]`;
   }
   if (typeof value === "object") {
     const entries = Object.entries(value as Record<string, unknown>)
@@ -335,7 +339,10 @@ export function pythonJsonDumps(value: unknown): string {
     return `{${entries
       .map(
         ([key, nested]) =>
-          `${pythonJsonString(key)}: ${pythonJsonDumps(nested)}`
+          `${pythonJsonString(key, ensureAscii)}: ${pythonJsonDumps(
+            nested,
+            options
+          )}`
       )
       .join(", ")}}`;
   }
@@ -344,7 +351,8 @@ export function pythonJsonDumps(value: unknown): string {
   );
 }
 
-function pythonJsonString(value: string): string {
+function pythonJsonString(value: string, ensureAscii = true): string {
+  if (!ensureAscii) return JSON.stringify(value);
   // `ensure_ascii=True` escapes everything outside the printable ASCII range,
   // including DEL, which JSON.stringify leaves as a literal character.
   return JSON.stringify(value).replace(

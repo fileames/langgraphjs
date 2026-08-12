@@ -170,6 +170,11 @@ related vector rows are removed by the shared schema's foreign-key cascade.
 once to create them up front, or let the first operation do it. Set
 `ensureTable: false` when the tables must already exist.
 
+Non-vector search returns the most recently updated items first, and vector
+search returns only items that have an embedding, both as in Python. Text
+embedded from a document matches Python's `get_text_at_path` exactly, so the
+same document produces the same vector in either language.
+
 Supported scalar filter operators are `$eq`, `$ne`, `$gt`, `$gte`, `$lt`,
 `$lte`, `$in`, `$nin`, and `$exists`. Filters that cannot be translated to
 bound Oracle SQL are rejected instead of being evaluated by an unbounded

@@ -1892,6 +1892,15 @@ WHERE prefix = :namespacePath
     return items;
   }
 
+  /**
+   * How many vector rows one item can produce, used to size the candidate
+   * fetch. Mirrors Python's `__estimated_num_vectors`.
+   */
+  private estimatedVectorsPerItem(): number {
+    const fields = this.indexConfig?.fields ?? ["$"];
+    return Math.max(fields.length, 1);
+  }
+
   private async fetchVectorRows(
     op: OracleSearchOperation,
     sqlFilter: SqlFilter | undefined,
@@ -1904,10 +1913,19 @@ WHERE prefix = :namespacePath
         ? ""
         : "\nOFFSET :sqlOffset ROWS FETCH NEXT :fetchLimit ROWS ONLY";
 
-    // MIN(distance) is the closest vector for the item; the score transform is
-    // applied once in the outer query, as Python's get_distance_operator does.
+    // Mirrors Python: join only rows that have a vector, take the closest
+    // candidates first so the vector index can do the work, then keep one row
+    // per item before paginating.
     const metric = distanceMetricSQL(this.indexConfig!);
-    const score = scoreFromDistanceSQL(this.indexConfig!, "sc.distance");
+    const score = scoreFromDistanceSQL(this.indexConfig!, "uniq.distance");
+    const expandedLimit =
+      fetchLimit === undefined
+        ? undefined
+        : (sqlOffset + fetchLimit) * this.estimatedVectorsPerItem() * 2 + 1;
+    const candidateClause =
+      expandedLimit === undefined
+        ? ""
+        : "\n  FETCH FIRST :expandedLimit ROWS ONLY";
 
     return this.withConnection(async (connection) => {
       const strategy = await this.resolveVectorBindStrategy(connection, false);
@@ -1916,15 +1934,16 @@ WHERE prefix = :namespacePath
   SELECT
     s.prefix,
     s.key,
-    MIN(
-      VECTOR_DISTANCE(
-        v.embedding,
-        ${vectorExpression("queryVector", strategy)},
-        ${metric}
-      )
+    s.value,
+    s.created_at,
+    s.updated_at,
+    VECTOR_DISTANCE(
+      v.embedding,
+      ${vectorExpression("queryVector", strategy)},
+      ${metric}
     ) AS distance
   FROM ${this.tableName} s
-  LEFT JOIN ${this.vectorTableName} v
+  JOIN ${this.vectorTableName} v
     ON v.prefix = s.prefix
     AND v.key = s.key
   WHERE (
@@ -1932,22 +1951,35 @@ WHERE prefix = :namespacePath
     OR s.prefix LIKE :namespacePrefix ESCAPE '\\'
   )
   AND (s.expires_at IS NULL OR s.expires_at > CURRENT_TIMESTAMP)${sqlFilter?.clause ?? ""}
-  GROUP BY
-    s.prefix,
-    s.key
+  ORDER BY distance ASC${candidateClause}
+),
+uniq AS (
+  SELECT prefix, key, value, created_at, updated_at, distance
+  FROM (
+    SELECT
+      prefix,
+      key,
+      value,
+      created_at,
+      updated_at,
+      distance,
+      ROW_NUMBER() OVER (
+        PARTITION BY prefix, key
+        ORDER BY distance ASC
+      ) AS rn
+    FROM scored
+  )
+  WHERE rn = 1
 )
 SELECT
-  s.prefix,
-  s.key,
-  s.value,
-  s.created_at,
-  s.updated_at,
-  CASE WHEN sc.distance IS NULL THEN NULL ELSE ${score} END AS score
-FROM scored sc
-INNER JOIN ${this.tableName} s
-  ON s.prefix = sc.prefix
-  AND s.key = sc.key
-ORDER BY CASE WHEN sc.distance IS NULL THEN 1 ELSE 0 END, sc.distance ASC, key${fetchClause}`,
+  uniq.prefix,
+  uniq.key,
+  uniq.value,
+  uniq.created_at,
+  uniq.updated_at,
+  ${score} AS score
+FROM uniq
+ORDER BY uniq.distance ASC, uniq.key${fetchClause}`,
         {
           queryVector:
             strategy === "native"
@@ -1959,6 +1991,7 @@ ORDER BY CASE WHEN sc.distance IS NULL THEN 1 ELSE 0 END, sc.distance ASC, key${
               ? "%"
               : namespacePrefixLikePattern(op.namespacePrefix),
           ...(sqlFilter?.binds ?? {}),
+          ...(expandedLimit === undefined ? {} : { expandedLimit }),
           ...(fetchLimit === undefined ? {} : { sqlOffset, fetchLimit }),
         },
         {
@@ -2072,7 +2105,7 @@ OFFSET :scanOffset ROWS FETCH NEXT :batchSize ROWS ONLY`,
           `SELECT prefix, key, value, created_at, updated_at
 FROM ${this.tableName}
 WHERE (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)${sqlFilter?.clause ?? ""}
-ORDER BY prefix, key${pagination}`,
+ORDER BY updated_at DESC, prefix, key${pagination}`,
           {
             ...(sqlFilter?.binds ?? {}),
             offset,
@@ -2093,7 +2126,7 @@ WHERE (
   OR prefix LIKE :namespacePrefix ESCAPE '\\'
 )
 AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)${sqlFilter?.clause ?? ""}
-ORDER BY CASE WHEN prefix = :namespacePath THEN 1 ELSE 0 END, prefix, key${pagination}`,
+ORDER BY updated_at DESC, prefix, key${pagination}`,
         {
           namespacePath: namespacePath(namespacePrefix),
           namespacePrefix: namespacePrefixLikePattern(namespacePrefix),

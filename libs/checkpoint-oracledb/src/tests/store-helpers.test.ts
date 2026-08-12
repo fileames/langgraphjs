@@ -109,12 +109,20 @@ describe("Oracle store helper modules", () => {
       },
     };
 
-    expect(getTextAtPath(value, "")).toEqual([JSON.stringify(value, null, 2)]);
-    expect(getTextAtPath(value, "$")).toEqual([JSON.stringify(value, null, 2)]);
+    // Reference strings from CPython:
+    //   json.dumps(value, sort_keys=True, ensure_ascii=False)
+    // The embedded text has to match Python exactly, or the same document
+    // produces different vectors in each language.
+    const pythonRoot =
+      '{"aliases": {"primary": {"text": "first alias"}, "secondary": ' +
+      '{"text": "second alias"}}, "items": [{"tags": ["a"], "text": "first"}, ' +
+      '{"tags": ["b"], "text": "second"}], "nested": {"count": 3}, ' +
+      '"title": "root"}';
+
+    expect(getTextAtPath(value, "")).toEqual([pythonRoot]);
+    expect(getTextAtPath(value, "$")).toEqual([pythonRoot]);
     expect(getTextAtPath(value, "nested.count")).toEqual(["3"]);
-    expect(getTextAtPath(value, "nested")).toEqual([
-      JSON.stringify({ count: 3 }, null, 2),
-    ]);
+    expect(getTextAtPath(value, "nested")).toEqual(['{"count": 3}']);
     expect(getTextAtPath(value, "items[-1].text")).toEqual(["second"]);
     expect(new Set(getTextAtPath(value, "items[*].{text,tags[0]}"))).toEqual(
       new Set(["first", "second", "a", "b"])
@@ -133,5 +141,24 @@ describe("Oracle store helper modules", () => {
     );
     expect(jsonValueExpression("not-valid[0]")).toBeUndefined();
     expect(jsonValueExpression("nested.1bad")).toBeUndefined();
+  });
+});
+
+describe("Python embedding text parity", () => {
+  test("renders booleans and non-ASCII the way Python does", () => {
+    // CPython: json.dumps({"a": True, "b": "é"}, sort_keys=True, ensure_ascii=False)
+    expect(getTextAtPath({ a: true, b: "é" }, "$")).toEqual([
+      '{"a": true, "b": "é"}',
+    ]);
+    // Python str(True) is "True", not "true".
+    expect(getTextAtPath({ flag: true }, "flag")).toEqual(["True"]);
+    expect(getTextAtPath({ flag: false }, "flag")).toEqual(["False"]);
+    expect(getTextAtPath({ n: 3 }, "n")).toEqual(["3"]);
+    expect(getTextAtPath({ s: "text" }, "s")).toEqual(["text"]);
+  });
+
+  test("keeps non-ASCII unescaped, unlike the index configuration hash", () => {
+    // get_text_at_path uses ensure_ascii=False; _generate_suffix does not.
+    expect(getTextAtPath({ t: { x: "é" } }, "t")).toEqual(['{"x": "é"}']);
   });
 });

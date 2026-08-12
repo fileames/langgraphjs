@@ -1,4 +1,26 @@
 // Copyright (c) 2026, Oracle and/or its affiliates.
+import { pythonJsonDumps } from "./index-config.js";
+
+/**
+ * Render a value the way Python's `get_text_at_path` does.
+ *
+ * LangGraph's two implementations disagree here: Python uses
+ * `json.dumps(obj, sort_keys=True, ensure_ascii=False)` while
+ * `@langchain/langgraph-checkpoint` uses `JSON.stringify(obj, null, 2)`.
+ * Since this store shares its vector tables with the Python package, the
+ * embedded text has to be the Python form or the same document produces
+ * different vectors in each language.
+ */
+function pythonText(value: unknown): string {
+  return pythonJsonDumps(value, { ensureAscii: false });
+}
+
+/** Python's `str()` for the scalars `get_text_at_path` passes through. */
+function pythonScalar(value: string | number | boolean): string {
+  if (typeof value === "boolean") return value ? "True" : "False";
+  return String(value);
+}
+
 function tokenizePath(path: string): string[] {
   if (!path) return [];
 
@@ -43,7 +65,7 @@ function tokenizePath(path: string): string[] {
 }
 
 export function getTextAtPath(value: unknown, path: string): string[] {
-  if (!path || path === "$") return [JSON.stringify(value, null, 2)];
+  if (!path || path === "$") return [pythonText(value)];
   const tokens = tokenizePath(path);
 
   const extract = (current: unknown, position: number): string[] => {
@@ -53,11 +75,11 @@ export function getTextAtPath(value: unknown, path: string): string[] {
         typeof current === "number" ||
         typeof current === "boolean"
       ) {
-        return [String(current)];
+        return [pythonScalar(current)];
       }
       if (current === null || current === undefined) return [];
       if (Array.isArray(current) || typeof current === "object") {
-        return [JSON.stringify(current, null, 2)];
+        return [pythonText(current)];
       }
       return [];
     }
