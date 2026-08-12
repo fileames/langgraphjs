@@ -8,4 +8,5 @@ load_run_state
 
 log "javascript reads (direction py2js, suffix ${PARITY_SUFFIX})"
 cd "${PARITY_ROOT}/js"
-PARITY_DIRECTION=py2js $(pnpm_bin) exec vitest run --config vitest.config.ts
+PARITY_DIRECTION=py2js "$(node_bin vitest)" run \
+  --config "${PARITY_ROOT}/js/vitest.config.ts"

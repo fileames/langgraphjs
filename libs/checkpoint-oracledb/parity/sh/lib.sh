@@ -74,6 +74,21 @@ pnpm_bin() {
   fi
 }
 
+# Resolve a locally installed binary by absolute path.
+#
+# `pnpm exec` refuses to run from parity/js because that directory has no
+# package.json of its own, so the binaries are located directly instead.
+node_bin() {
+  local name="$1"
+  for dir in "${PACKAGE_ROOT}/node_modules/.bin" "${REPO_ROOT}/node_modules/.bin"; do
+    if [[ -x "${dir}/${name}" ]]; then
+      echo "${dir}/${name}"
+      return 0
+    fi
+  done
+  die "${name} not found. Run pnpm install at the repository root first."
+}
+
 require_uv() {
   command -v uv >/dev/null 2>&1 || die "uv not found. See https://docs.astral.sh/uv/"
 }

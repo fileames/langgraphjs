@@ -8,4 +8,4 @@ load_run_state
 
 log "javascript writes (direction js2py, suffix ${PARITY_SUFFIX})"
 cd "${PARITY_ROOT}/js"
-PARITY_DIRECTION=js2py $(pnpm_bin) exec tsx src/write.ts
+PARITY_DIRECTION=js2py "$(node_bin tsx)" "${PARITY_ROOT}/js/src/write.ts"

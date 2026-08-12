@@ -84,6 +84,14 @@ matching). They are documented rather than asserted, so this suite stays a
 parity check rather than a snapshot of current bugs. If you want them to fail
 loudly, promote them to assertions.
 
+## Troubleshooting
+
+The JavaScript steps invoke `vitest` and `tsx` by absolute path from
+`libs/checkpoint-oracledb/node_modules/.bin`. `pnpm exec` is not used there:
+`parity/js` has no `package.json`, and pnpm refuses to run from a directory
+outside a workspace package. For the same reason `js/vitest.config.ts` pins
+`root` to its own directory rather than relying on the working directory.
+
 ## Caveat
 
 This suite has not been executed against a live database — it was written
