@@ -2420,3 +2420,67 @@ describeIfOracle("OracleStore lifecycle", () => {
     }
   });
 });
+
+describeIfOracle("OracleStore table naming", () => {
+  async function tableExists(tableName: string): Promise<boolean> {
+    const connection = await oracledb.getConnection(oracleConnection);
+    try {
+      const result = await connection.execute<{ N: number }>(
+        `SELECT COUNT(*) AS n FROM user_tables WHERE table_name = :tableName`,
+        { tableName },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+      return Number(result.rows?.[0]?.N ?? 0) > 0;
+    } finally {
+      await connection.close();
+    }
+  }
+
+  test("creates unquoted upper-case tables regardless of suffix casing", async () => {
+    const suffix = uniquePrefix().replace(/_+$/, "");
+    const lower = new OracleStore({
+      connection: oracleConnection,
+      tableSuffix: suffix.toLowerCase(),
+    });
+    const upper = new OracleStore({
+      connection: oracleConnection,
+      tableSuffix: suffix.toUpperCase(),
+    });
+
+    try {
+      await lower.setup();
+      await expect(tableExists(`STORE_${suffix.toUpperCase()}`)).resolves.toBe(
+        true
+      );
+      await expect(tableExists(`STORE_${suffix.toLowerCase()}`)).resolves.toBe(
+        false
+      );
+
+      // Both casings address the same table.
+      await lower.put(["casing"], "item", { text: "hello" });
+      await expect(upper.get(["casing"], "item")).resolves.toMatchObject({
+        value: { text: "hello" },
+      });
+    } finally {
+      await lower.stop();
+      await upper.stop();
+      await dropStoreTables(suffix);
+    }
+  });
+
+  test("rejects suffixes that would require quoting before connecting", () => {
+    for (const tableSuffix of [
+      'my"table',
+      '"quoted"',
+      "my table",
+      "my-table",
+      "tenant;DROP TABLE STORE_X",
+      "1memory",
+    ]) {
+      expect(
+        () =>
+          new OracleStore({ connection: oracleConnection, tableSuffix })
+      ).toThrow(/must start with a letter/);
+    }
+  });
+});

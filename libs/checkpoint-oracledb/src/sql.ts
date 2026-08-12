@@ -2,18 +2,9 @@
 import { TASKS } from "@langchain/langgraph-checkpoint";
 import { Buffer } from "node:buffer";
 
-import { DEFAULT_TABLE_PREFIX, ORACLE_IDENTIFIER_MAX_LENGTH } from "./utils.js";
+import { suffixedTableName, validateTableSuffix } from "./identifiers.js";
 
-export { DEFAULT_TABLE_PREFIX };
-
-const TABLE_SUFFIXES = [
-  "CHECKPOINTS",
-  "CHECKPOINT_BLOBS",
-  "CHECKPOINT_WRITES",
-  "CHECKPOINT_MIGRATIONS",
-] as const;
-
-const TABLE_PREFIX_RE = /^[A-Za-z][A-Za-z0-9_]*$/;
+export { validateTableSuffix };
 const JSON_PATH_MAX_BYTES = 32767;
 const JSON_PASSING_STRING_MAX_BYTES = 32767;
 
@@ -73,46 +64,29 @@ export const decodeCheckpointNamespace = (checkpointNs: string): string => {
   return checkpointNs === " " ? "" : checkpointNs;
 };
 
-export const validateTablePrefix = (
-  tablePrefix: string = DEFAULT_TABLE_PREFIX
-): string => {
-  if (tablePrefix === "") return tablePrefix;
-
-  if (!TABLE_PREFIX_RE.test(tablePrefix)) {
-    throw new Error(
-      "Oracle checkpoint tablePrefix must start with a letter and contain only letters, numbers, or underscores."
-    );
-  }
-
-  const normalizedPrefix = tablePrefix.toUpperCase();
-  for (const suffix of TABLE_SUFFIXES) {
-    const tableName = `${normalizedPrefix}${suffix}`;
-    if (tableName.length > ORACLE_IDENTIFIER_MAX_LENGTH) {
-      throw new Error(
-        `Oracle checkpoint table name "${tableName}" exceeds ${ORACLE_IDENTIFIER_MAX_LENGTH} characters.`
-      );
-    }
-  }
-
-  return normalizedPrefix;
-};
-
+/**
+ * Checkpoint table names for a suffix.
+ *
+ * With no suffix these are the bare names Python creates, so both languages
+ * resolve to the same tables by default. Every name goes through
+ * {@link suffixedTableName}, which yields an unquoted upper-case identifier.
+ */
 export const getOracleCheckpointTables = (
-  tablePrefix: string = DEFAULT_TABLE_PREFIX
-): OracleCheckpointTables => {
-  const prefix = validateTablePrefix(tablePrefix);
-  return {
-    checkpoints: `${prefix}CHECKPOINTS`,
-    checkpoint_blobs: `${prefix}CHECKPOINT_BLOBS`,
-    checkpoint_writes: `${prefix}CHECKPOINT_WRITES`,
-    checkpoint_migrations: `${prefix}CHECKPOINT_MIGRATIONS`,
-  };
-};
+  tableSuffix: string = ""
+): OracleCheckpointTables => ({
+  checkpoints: suffixedTableName("CHECKPOINTS", tableSuffix),
+  checkpoint_blobs: suffixedTableName("CHECKPOINT_BLOBS", tableSuffix),
+  checkpoint_writes: suffixedTableName("CHECKPOINT_WRITES", tableSuffix),
+  checkpoint_migrations: suffixedTableName(
+    "CHECKPOINT_MIGRATIONS",
+    tableSuffix
+  ),
+});
 
 export const getOracleSetupStatements = (
-  tablePrefix: string = DEFAULT_TABLE_PREFIX
+  tableSuffix: string = ""
 ): OracleSetupStatements => {
-  const tables = getOracleCheckpointTables(tablePrefix);
+  const tables = getOracleCheckpointTables(tableSuffix);
   return {
     SELECT_LATEST_MIGRATION_SQL: `SELECT v
 FROM ${tables.checkpoint_migrations}
@@ -135,9 +109,9 @@ WHERE table_name = UPPER(:table_name)`,
 };
 
 export const getOracleSQLStatements = (
-  tablePrefix: string = DEFAULT_TABLE_PREFIX
+  tableSuffix: string = ""
 ): OracleSQLStatements => {
-  const tables = getOracleCheckpointTables(tablePrefix);
+  const tables = getOracleCheckpointTables(tableSuffix);
 
   return {
     SELECT_CHECKPOINT_SQL: `SELECT
@@ -591,9 +565,9 @@ export const buildCheckpointWhereClause = (
 
 export const buildSelectCheckpointSQL = (
   input: OracleSearchWhereInput & { limit?: number },
-  tablePrefix: string = DEFAULT_TABLE_PREFIX
+  tableSuffix: string = ""
 ): OracleParameterizedSQL => {
-  const statements = getOracleSQLStatements(tablePrefix);
+  const statements = getOracleSQLStatements(tableSuffix);
   const where = buildCheckpointWhereClause(input);
   const limit = buildFetchFirstClause(input.limit);
 

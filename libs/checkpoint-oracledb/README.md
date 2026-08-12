@@ -55,9 +55,18 @@ The saver supports checkpoint listing, pending writes, custom serializers,
 child checkpoint namespaces, and `deleteThread(threadId)`.
 
 Checkpoint metadata filters are evaluated in Oracle before ordering and
-limiting results. Objects and arrays use recursive containment semantics, and
-`null` matches only an explicitly present JSON null. Filter values must be
-plain JSON; unsupported JavaScript-specific values fail before the query runs.
+limiting results. Objects and arrays use recursive containment semantics, so
+`{ cfg: { a: 1 } }` matches a stored `{ cfg: { a: 1, b: 2 } }`. This matches
+the `metadata @> ...` behaviour of the Postgres savers in both languages. A
+filter key is always a literal key, so `{ "a.b": 1 }` looks for a key named
+`a.b` rather than a nested `a` -> `b` path. `null` matches only an explicitly
+present JSON null. Filter values must be plain JSON; unsupported
+JavaScript-specific values fail before the query runs.
+
+The Python `langgraph-oracledb` saver differs on both points: it compares
+sub-documents for exact equality and reads a dotted key as a nested path. A
+filter written for one saver may therefore return different rows on the other,
+even against the same tables.
 
 The checkpoint schema follows the public Python `langgraph-oracledb` saver.
 
@@ -286,14 +295,25 @@ Existing indexes are reported by `getDiagnostics()` under
 
 ## Tables and cleanup
 
-The checkpoint saver accepts `tablePrefix`, which is normalized to uppercase:
+Both components accept a `tableSuffix`. Without one the checkpoint saver uses
+the bare names Python creates, so the two languages share tables by default:
 
 ```text
-<PREFIX>CHECKPOINTS
-<PREFIX>CHECKPOINT_BLOBS
-<PREFIX>CHECKPOINT_WRITES
-<PREFIX>CHECKPOINT_MIGRATIONS
+CHECKPOINTS             CHECKPOINTS_<SUFFIX>
+CHECKPOINT_BLOBS        CHECKPOINT_BLOBS_<SUFFIX>
+CHECKPOINT_WRITES       CHECKPOINT_WRITES_<SUFFIX>
+CHECKPOINT_MIGRATIONS   CHECKPOINT_MIGRATIONS_<SUFFIX>
 ```
+
+A suffix isolates independent checkpoint sets within one Oracle schema, which
+is what `PostgresSaver` uses its `schema` option for. Python's checkpointer has
+no equivalent yet, so a suffixed set is reachable only from JavaScript for now.
+
+Suffixes follow Python's `table_suffix` rule: they must start with a letter and
+contain only letters, digits, or underscores, up to 64 characters. Names are
+emitted as unquoted Oracle identifiers, so they are matched case-insensitively
+(`memory` and `MEMORY` address `..._MEMORY`), and anything that would require
+double quoting is rejected rather than quoted.
 
 The Store accepts `tableSuffix` and uses the same schema, names, namespace/key
 encoding, and migration history as `langgraph-oracledb` for Python:

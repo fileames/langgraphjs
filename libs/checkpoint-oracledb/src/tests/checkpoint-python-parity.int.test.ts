@@ -22,8 +22,8 @@ const { ORACLE_USER, ORACLE_PASSWORD, ORACLE_CONNECT_STRING } = process.env;
 const hasOracleCredentials =
   ORACLE_USER && ORACLE_PASSWORD && ORACLE_CONNECT_STRING;
 
-const tablePrefix =
-  process.env.ORACLE_LANGGRAPH_TABLE_PREFIX ??
+const tableSuffix =
+  process.env.ORACLE_LANGGRAPH_TABLE_SUFFIX ??
   `LG_PY_PARITY_${Date.now().toString(36).toUpperCase()}_`;
 
 const oracleConnection = {
@@ -34,7 +34,7 @@ const oracleConnection = {
 
 const describeIfOracle = hasOracleCredentials ? describe : describe.skip;
 
-function uniqueCheckpointPrefix(label: string): string {
+function uniqueCheckpointSuffix(label: string): string {
   return `LG_${label}_${Date.now().toString(36).toUpperCase()}_${Math.random()
     .toString(36)
     .slice(2, 8)
@@ -118,7 +118,7 @@ async function withSaver<T>(
 ): Promise<T> {
   const saver = new OracleCheckpointSaver({
     connection: oracleConnection,
-    tablePrefix,
+    tableSuffix,
   });
   const threads = new Set<string>();
   const trackThread = (id: string) => {
@@ -197,10 +197,10 @@ async function createCarryOverCheckpoints(
 
 describeIfOracle("Oracle checkpoint Python parity", () => {
   test("handles concurrent setup calls on the same saver instance", async () => {
-    const prefix = uniqueCheckpointPrefix("SETUP");
+    const prefix = uniqueCheckpointSuffix("SETUP");
     const saver = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix: prefix,
+      tableSuffix: prefix,
     });
 
     try {
@@ -214,13 +214,13 @@ describeIfOracle("Oracle checkpoint Python parity", () => {
   });
 
   test("handles concurrent setup from separate saver instances", async () => {
-    const prefix = uniqueCheckpointPrefix("SETUP_RACE");
+    const prefix = uniqueCheckpointSuffix("SETUP_RACE");
     const savers = Array.from(
       { length: 4 },
       () =>
         new OracleCheckpointSaver({
           connection: oracleConnection,
-          tablePrefix: prefix,
+          tableSuffix: prefix,
         })
     );
 
@@ -332,11 +332,11 @@ describeIfOracle("Oracle checkpoint Python parity", () => {
     const secondCheckpointId = fixedCheckpointId(2002);
     const firstSaver = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
     const secondSaver = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
 
     try {
@@ -546,7 +546,7 @@ describeIfOracle("Oracle checkpoint Python parity", () => {
 
     const reader = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
 
     try {
@@ -554,7 +554,7 @@ describeIfOracle("Oracle checkpoint Python parity", () => {
         sessionSpecs.map(async ({ threadId: id, checkpointId, state }) => {
           const saver = new OracleCheckpointSaver({
             connection: oracleConnection,
-            tablePrefix,
+            tableSuffix,
           });
 
           try {
@@ -645,7 +645,7 @@ describeIfOracle("Oracle checkpoint Python parity", () => {
     });
     const saver = new OracleCheckpointSaver({
       pool,
-      tablePrefix,
+      tableSuffix,
     });
     const id = threadId("external-pool");
 
@@ -961,10 +961,10 @@ describeIfOracle("Oracle checkpoint Python parity", () => {
 
 describeIfOracle("OracleCheckpointSaver connection strings", () => {
   test("round-trips through a Python style connection string", async () => {
-    const prefix = uniqueCheckpointPrefix("CONNSTR");
+    const prefix = uniqueCheckpointSuffix("CONNSTR");
     const saver = OracleCheckpointSaver.fromConnString(
       `${ORACLE_USER}/${ORACLE_PASSWORD}@${ORACLE_CONNECT_STRING}`,
-      { tablePrefix: prefix, poolConfig: { minSize: 1, maxSize: 2 } }
+      { tableSuffix: prefix, poolConfig: { minSize: 1, maxSize: 2 } }
     );
 
     try {
@@ -992,6 +992,105 @@ describeIfOracle("OracleCheckpointSaver connection strings", () => {
     } finally {
       await saver.end();
       await dropCheckpointTables(prefix);
+    }
+  });
+});
+
+describeIfOracle("OracleCheckpointSaver table naming", () => {
+  async function tableExists(tableName: string): Promise<boolean> {
+    const connection = await oracledb.getConnection(oracleConnection);
+    try {
+      const result = await connection.execute<{ N: number }>(
+        `SELECT COUNT(*) AS n FROM user_tables WHERE table_name = :tableName`,
+        { tableName },
+        { outFormat: oracledb.OUT_FORMAT_OBJECT }
+      );
+      return Number(result.rows?.[0]?.N ?? 0) > 0;
+    } finally {
+      await connection.close();
+    }
+  }
+
+  function sampleCheckpoint(id: string): Checkpoint {
+    return {
+      v: 4,
+      id,
+      ts: "2024-07-31T20:14:19.804150+00:00",
+      channel_values: { text: "hello" },
+      channel_versions: {},
+      versions_seen: {},
+    } as unknown as Checkpoint;
+  }
+
+  test("creates unquoted upper-case tables regardless of suffix casing", async () => {
+    const suffix = uniqueCheckpointSuffix("CASE").replace(/_+$/, "");
+    const lower = new OracleCheckpointSaver({
+      connection: oracleConnection,
+      tableSuffix: suffix.toLowerCase(),
+    });
+    const upper = new OracleCheckpointSaver({
+      connection: oracleConnection,
+      tableSuffix: suffix.toUpperCase(),
+    });
+
+    try {
+      await lower.setup();
+
+      // Oracle folds unquoted identifiers, so the table is upper case even
+      // though the suffix was written in lower case.
+      await expect(
+        tableExists(`CHECKPOINTS_${suffix.toUpperCase()}`)
+      ).resolves.toBe(true);
+      await expect(
+        tableExists(`CHECKPOINTS_${suffix.toLowerCase()}`)
+      ).resolves.toBe(false);
+
+      // A differently cased suffix therefore addresses the same table.
+      const config = {
+        configurable: { thread_id: "casing", checkpoint_ns: "" },
+      };
+      const next = await lower.put(
+        config,
+        sampleCheckpoint("1ef4f797-8335-6428-8001-8a1503f9b875"),
+        {} as CheckpointMetadata,
+        {}
+      );
+      await upper.setup();
+      const tuple = await upper.getTuple(next);
+      expect(tuple?.checkpoint.channel_values).toEqual({ text: "hello" });
+    } finally {
+      await lower.end();
+      await upper.end();
+      await dropCheckpointTables(suffix);
+    }
+  });
+
+  test("uses Python's bare table names when no suffix is given", async () => {
+    const tables = getOracleCheckpointTables();
+    expect(tables).toEqual({
+      checkpoints: "CHECKPOINTS",
+      checkpoint_blobs: "CHECKPOINT_BLOBS",
+      checkpoint_writes: "CHECKPOINT_WRITES",
+      checkpoint_migrations: "CHECKPOINT_MIGRATIONS",
+    });
+  });
+
+  test("rejects suffixes that would require quoting before connecting", () => {
+    for (const tableSuffix of [
+      'my"table',
+      '"quoted"',
+      "my table",
+      "my-table",
+      "tenant;DROP TABLE CHECKPOINTS",
+      "1memory",
+    ]) {
+      expect(
+        () =>
+          new OracleCheckpointSaver({
+            connection: oracleConnection,
+            tableSuffix,
+          })
+      ).toThrow(/must start with a letter/);
     }
   });
 });

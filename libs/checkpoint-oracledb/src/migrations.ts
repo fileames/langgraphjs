@@ -1,6 +1,5 @@
 // Copyright (c) 2026, Oracle and/or its affiliates.
 import {
-  DEFAULT_TABLE_PREFIX,
   getOracleCheckpointTables,
   type OracleCheckpointTables,
 } from "./sql.js";
@@ -91,10 +90,8 @@ const getCreateThreadIndexSQL = (
  * To add a new migration, append a new SQL string. The array index is the
  * migration version persisted in checkpoint_migrations.v.
  */
-export const getMigrations = (
-  tablePrefix: string = DEFAULT_TABLE_PREFIX
-): string[] => {
-  const tables = getOracleCheckpointTables(tablePrefix);
+export const getMigrations = (tableSuffix: string = ""): string[] => {
+  const tables = getOracleCheckpointTables(tableSuffix);
   return [
     getCreateMigrationTableSQL(tables),
     getCreateCheckpointsTableSQL(tables),
@@ -116,6 +113,6 @@ export const getMigrations = (
 };
 
 export const getMigrationRecords = (
-  tablePrefix: string = DEFAULT_TABLE_PREFIX
+  tableSuffix: string = ""
 ): OracleCheckpointMigration[] =>
-  getMigrations(tablePrefix).map((sql, version) => ({ version, sql }));
+  getMigrations(tableSuffix).map((sql, version) => ({ version, sql }));

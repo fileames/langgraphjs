@@ -1,7 +1,6 @@
 // Copyright (c) 2026, Oracle and/or its affiliates.
 import { Buffer } from "node:buffer";
 
-export const DEFAULT_TABLE_PREFIX = "LANGGRAPH_";
 export const ORACLE_IDENTIFIER_MAX_LENGTH = 128;
 
 export type OracleRowLike = Record<string, unknown>;

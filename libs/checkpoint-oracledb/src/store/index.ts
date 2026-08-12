@@ -46,7 +46,7 @@ import {
   STORE_VECTOR_NAMESPACE_PATH_MAX_BYTES,
   VECTOR_STRING_BIND_MAX_BYTES,
 } from "./constants.js";
-import { validateIdentifier } from "./identifiers.js";
+import { validateIdentifier, validateTableSuffix } from "../identifiers.js";
 import {
   assertStoredIndexConfigMatches,
   defaultTableSuffix,
@@ -130,15 +130,6 @@ function validateTtlMinutes(name: string, value: number | undefined): void {
   if (value !== undefined && (!Number.isFinite(value) || value <= 0)) {
     throw new Error(`${name} must be a finite number greater than 0.`);
   }
-}
-
-function validateTableSuffix(suffix: string): string {
-  if (!/^[A-Za-z][A-Za-z0-9_]{0,63}$/.test(suffix)) {
-    throw new Error(
-      "tableSuffix must start with a letter and contain only letters, digits, or underscores, with a maximum length of 64 characters."
-    );
-  }
-  return suffix;
 }
 
 type StoreRow = {

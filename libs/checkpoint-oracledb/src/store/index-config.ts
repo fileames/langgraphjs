@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import type { IndexConfig } from "@langchain/langgraph-checkpoint";
 
 import { ORACLE_VECTOR_MAX_DIMENSIONS } from "./constants.js";
-import { generatedIdentifier, validateIdentifier } from "./identifiers.js";
+import { generatedIdentifier, validateIdentifier } from "../identifiers.js";
 
 /**
  * Oracle AI Vector Search configuration for {@link OracleStore}.

@@ -1,6 +1,6 @@
 // Copyright (c) 2026, Oracle and/or its affiliates.
 import { oracleConstraintName } from "../utils.js";
-import { generatedIdentifier } from "./identifiers.js";
+import { generatedIdentifier } from "../identifiers.js";
 import {
   createConfiguredVectorIndexSQL,
   type OracleIndexConfig,

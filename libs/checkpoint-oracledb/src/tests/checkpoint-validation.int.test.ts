@@ -24,8 +24,8 @@ const oracleConnection = {
 
 const saverPrefixes = new WeakMap<OracleCheckpointSaver, string>();
 
-async function dropCheckpointTables(tablePrefix: string): Promise<void> {
-  const tables = getOracleCheckpointTables(tablePrefix);
+async function dropCheckpointTables(tableSuffix: string): Promise<void> {
+  const tables = getOracleCheckpointTables(tableSuffix);
   const connection = await oracledb.getConnection(oracleConnection);
   try {
     for (const tableName of [
@@ -51,23 +51,23 @@ const initializer: CheckpointSaverTestInitializer<OracleCheckpointSaver> = {
   checkpointerName: "@langchain/langgraph-checkpoint-oracledb",
 
   async createCheckpointer() {
-    const tablePrefix = `LG_VALID_${Date.now()
+    const tableSuffix = `LG_VALID_${Date.now()
       .toString(36)
       .toUpperCase()}_${Math.random().toString(36).slice(2, 8).toUpperCase()}_`;
     const checkpointer = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
     await checkpointer.setup();
-    saverPrefixes.set(checkpointer, tablePrefix);
+    saverPrefixes.set(checkpointer, tableSuffix);
     return checkpointer;
   },
 
   async destroyCheckpointer(checkpointer) {
-    const tablePrefix = saverPrefixes.get(checkpointer);
+    const tableSuffix = saverPrefixes.get(checkpointer);
     await checkpointer.end();
-    if (tablePrefix) {
-      await dropCheckpointTables(tablePrefix);
+    if (tableSuffix) {
+      await dropCheckpointTables(tableSuffix);
     }
   },
 };

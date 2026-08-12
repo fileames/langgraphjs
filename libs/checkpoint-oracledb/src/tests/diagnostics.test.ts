@@ -74,7 +74,7 @@ class FakeDiagnosticsConnection implements OracleConnectionLike {
       const tableName = sql
         .match(/FROM\s+([A-Z0-9_$#_]+)/i)?.[1]
         ?.toUpperCase();
-      if (tableName?.endsWith("CHECKPOINT_MIGRATIONS")) {
+      if (tableName?.includes("CHECKPOINT_MIGRATIONS")) {
         if (!this.options.checkpointTables) throw missingTableError();
         return {
           rows: (this.options.checkpointApplied ?? []).map(
@@ -241,12 +241,15 @@ function missingTableError(): Error & { errorNum: number } {
   return error;
 }
 
-const checkpointTableNames = (prefix: string): string[] => [
-  `${prefix}CHECKPOINTS`,
-  `${prefix}CHECKPOINT_BLOBS`,
-  `${prefix}CHECKPOINT_WRITES`,
-  `${prefix}CHECKPOINT_MIGRATIONS`,
-];
+const checkpointTableNames = (token: string): string[] => {
+  const suffix = token.replace(/_+$/, "");
+  return [
+    `CHECKPOINTS_${suffix}`,
+    `CHECKPOINT_BLOBS_${suffix}`,
+    `CHECKPOINT_WRITES_${suffix}`,
+    `CHECKPOINT_MIGRATIONS_${suffix}`,
+  ];
+};
 
 const storeTableNames = (
   prefix: string,
@@ -282,13 +285,14 @@ const columns = (
   }));
 
 function checkpointColumnRows(
-  prefix: string,
+  token: string,
   checkpointDataType = "JSON",
   omitCheckpointColumn = false
 ): FakeRow[] {
+  const [checkpoints, blobs, writes, migrations] = checkpointTableNames(token);
   return [
-    ...columns(`${prefix}CHECKPOINT_MIGRATIONS`, [["V", "NUMBER"]]),
-    ...columns(`${prefix}CHECKPOINTS`, [
+    ...columns(migrations, [["V", "NUMBER"]]),
+    ...columns(checkpoints, [
       ["THREAD_ID", "VARCHAR2"],
       ["CHECKPOINT_NS", "VARCHAR2"],
       ["CHECKPOINT_ID", "VARCHAR2"],
@@ -299,7 +303,7 @@ function checkpointColumnRows(
         : ([["CHECKPOINT", checkpointDataType]] as Array<[string, string]>)),
       ["METADATA", "JSON"],
     ]),
-    ...columns(`${prefix}CHECKPOINT_BLOBS`, [
+    ...columns(blobs, [
       ["THREAD_ID", "VARCHAR2"],
       ["CHECKPOINT_NS", "VARCHAR2"],
       ["CHANNEL", "VARCHAR2"],
@@ -307,7 +311,7 @@ function checkpointColumnRows(
       ["TYPE", "VARCHAR2"],
       ["BLOB", "BLOB"],
     ]),
-    ...columns(`${prefix}CHECKPOINT_WRITES`, [
+    ...columns(writes, [
       ["THREAD_ID", "VARCHAR2"],
       ["CHECKPOINT_NS", "VARCHAR2"],
       ["CHECKPOINT_ID", "VARCHAR2"],
@@ -366,23 +370,25 @@ const pkRows = (
     POSITION: index + 1,
   }));
 
-function checkpointConstraintRows(prefix: string): FakeRow[] {
+function checkpointConstraintRows(token: string): FakeRow[] {
+  const [checkpoints, blobs, writes, migrations] =
+    checkpointTableNames(token);
   return [
-    ...pkRows(`${prefix}CHECKPOINT_MIGRATIONS`, ["V"], `${prefix}CP_MIG_PK`),
+    ...pkRows(migrations, ["V"], `${token}CP_MIG_PK`),
     ...pkRows(
-      `${prefix}CHECKPOINTS`,
+      checkpoints,
       ["THREAD_ID", "CHECKPOINT_NS", "CHECKPOINT_ID"],
-      `${prefix}CP_PK`
+      `${token}CP_PK`
     ),
     ...pkRows(
-      `${prefix}CHECKPOINT_BLOBS`,
+      blobs,
       ["THREAD_ID", "CHECKPOINT_NS", "CHANNEL", "VERSION"],
-      `${prefix}CB_PK`
+      `${token}CB_PK`
     ),
     ...pkRows(
-      `${prefix}CHECKPOINT_WRITES`,
+      writes,
       ["THREAD_ID", "CHECKPOINT_NS", "CHECKPOINT_ID", "TASK_ID", "IDX"],
-      `${prefix}CW_PK`
+      `${token}CW_PK`
     ),
   ];
 }
@@ -434,14 +440,14 @@ describe("Oracle diagnostics", () => {
     });
     const saver = new OracleCheckpointSaver({
       connection,
-      tablePrefix: "lg_missing_",
+      tableSuffix: "lg_missing",
     });
 
     const diagnostics = await saver.getDiagnostics();
 
     expect(diagnostics.status).toBe("missing");
     expect(diagnostics.migrations.status).toBe("missing");
-    expect(diagnostics.tablePrefix).toBe("LG_MISSING_");
+    expect(diagnostics.tableSuffix).toBe("lg_missing");
     expect(diagnostics.storageMode).toBe("missing");
     expect(connection.statements.length).toBeGreaterThan(0);
   });
@@ -454,7 +460,7 @@ describe("Oracle diagnostics", () => {
     });
     const saver = new OracleCheckpointSaver({
       connection,
-      tablePrefix: "lg_ready_",
+      tableSuffix: "lg_ready",
     });
 
     const diagnostics = await saver.getDiagnostics();
@@ -475,7 +481,7 @@ describe("Oracle diagnostics", () => {
     });
     const clobSaver = new OracleCheckpointSaver({
       connection: clobConnection,
-      tablePrefix: "lg_clob_",
+      tableSuffix: "lg_clob",
     });
 
     await expect(clobSaver.getDiagnostics()).resolves.toMatchObject({
@@ -491,13 +497,13 @@ describe("Oracle diagnostics", () => {
     });
     const missingColumnSaver = new OracleCheckpointSaver({
       connection: missingColumnConnection,
-      tablePrefix: "lg_unknown_storage_",
+      tableSuffix: "lg_unknown_storage",
     });
 
     const diagnostics = await missingColumnSaver.getDiagnostics();
     expect(diagnostics.storageMode).toBe("unknown");
     expect(diagnostics.issues).toContain(
-      "LG_UNKNOWN_STORAGE_CHECKPOINTS.CHECKPOINT: missing required column"
+      "CHECKPOINTS_LG_UNKNOWN_STORAGE.CHECKPOINT: missing required column"
     );
   });
 
@@ -679,7 +685,7 @@ describe("Oracle diagnostics", () => {
     });
     const saver = new OracleCheckpointSaver({
       connection,
-      tablePrefix: "lg_safe_",
+      tableSuffix: "lg_safe",
     });
 
     const diagnostics = await saver.getDiagnostics();

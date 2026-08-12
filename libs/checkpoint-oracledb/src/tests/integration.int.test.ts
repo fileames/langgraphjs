@@ -17,8 +17,8 @@ const { ORACLE_USER, ORACLE_PASSWORD, ORACLE_CONNECT_STRING } = process.env;
 const hasOracleCredentials =
   ORACLE_USER && ORACLE_PASSWORD && ORACLE_CONNECT_STRING;
 
-const tablePrefix =
-  process.env.ORACLE_LANGGRAPH_TABLE_PREFIX ??
+const tableSuffix =
+  process.env.ORACLE_LANGGRAPH_TABLE_SUFFIX ??
   `LG_TEST_${Date.now().toString(36).toUpperCase()}_`;
 
 const oracleConnection = {
@@ -77,7 +77,7 @@ describeIfOracle("Oracle integration", () => {
   test("runs checkpoint put/getTuple/list/putWrites/deleteThread", async () => {
     const saver = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
     const threadId = `thread-${Date.now()}`;
 
@@ -111,7 +111,7 @@ describeIfOracle("Oracle integration", () => {
   test("keeps empty checkpoint namespace distinct from user namespace", async () => {
     const saver = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
     const threadId = `namespace-${Date.now()}`;
     const collisionNs = "__langgraph_empty_checkpoint_ns__";
@@ -145,7 +145,7 @@ describeIfOracle("Oracle integration", () => {
   test("uses deep metadata containment for list filters", async () => {
     const saver = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
     const threadId = `metadata-${Date.now()}`;
     const metadataRows: Array<[string, CheckpointMetadata]> = [
@@ -269,7 +269,7 @@ describeIfOracle("Oracle integration", () => {
   test("hydrates legacy pending sends from parent checkpoint TASKS writes", async () => {
     const saver = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
     const threadId = `pending-sends-${Date.now()}`;
     const parent = checkpoint("parent");
@@ -302,7 +302,7 @@ describeIfOracle("Oracle integration", () => {
   test("handles concurrent checkpoint puts and duplicate writes idempotently", async () => {
     const saver = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
     const threadId = `concurrent-${Date.now()}`;
     const config = {
@@ -352,11 +352,11 @@ describeIfOracle("Oracle integration", () => {
   test("fails with clear validation errors before Oracle string limits", async () => {
     const saver = new OracleCheckpointSaver({
       connection: oracleConnection,
-      tablePrefix,
+      tableSuffix,
     });
     const store = new OracleStore({
       connection: oracleConnection,
-      tableSuffix: tablePrefix.replace(/_+$/, ""),
+      tableSuffix: tableSuffix.replace(/_+$/, ""),
     });
 
     try {
@@ -385,7 +385,7 @@ describeIfOracle("Oracle integration", () => {
   test("runs store put/get/search/listNamespaces/delete", async () => {
     const store = new OracleStore({
       connection: oracleConnection,
-      tableSuffix: tablePrefix.replace(/_+$/, ""),
+      tableSuffix: tableSuffix.replace(/_+$/, ""),
     });
     const namespace = ["memories", `user-${Date.now()}`];
 
@@ -423,7 +423,7 @@ describeIfOracle("Oracle integration", () => {
   test("runs store vector indexing and query search", async () => {
     const store = new OracleStore({
       connection: oracleConnection,
-      tableSuffix: tablePrefix.replace(/_+$/, ""),
+      tableSuffix: tableSuffix.replace(/_+$/, ""),
       index: {
         dims: 2,
         embeddings: testEmbeddings as IndexConfig["embeddings"],

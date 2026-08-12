@@ -1,8 +1,5 @@
 // Copyright (c) 2026, Oracle and/or its affiliates.
-export {
-  DEFAULT_TABLE_PREFIX,
-  ORACLE_IDENTIFIER_MAX_LENGTH,
-} from "../utils.js";
+export { ORACLE_IDENTIFIER_MAX_LENGTH } from "../utils.js";
 
 export const STORE_NAMESPACE_PATH_MAX_BYTES = 4000;
 export const STORE_KEY_MAX_BYTES = 4000;

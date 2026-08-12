@@ -44,7 +44,7 @@ import {
   getOracleSQLStatements,
   getOracleSetupStatements,
   getPendingSendsParams,
-  validateTablePrefix,
+  validateTableSuffix,
 } from "./sql.js";
 import {
   isOracleError,
@@ -94,7 +94,7 @@ export interface OraclePoolLike {
 export interface OracleCheckpointSaverOptions {
   connection?: OracleConnectionLike | OracleConnectionOptions;
   pool?: OraclePoolLike;
-  tablePrefix?: string;
+  tableSuffix?: string;
   serde?: SerializerProtocol;
   /**
    * Maximum serialized size, in MiB, for plain JSON channel values stored
@@ -498,7 +498,7 @@ export class OracleCheckpointSaver extends BaseCheckpointSaver {
 
   private readonly connectionOptions?: OracleConnectionOptions;
 
-  private readonly tablePrefix: string;
+  private readonly tableSuffix: string;
 
   private readonly sql: ReturnType<typeof getOracleSQLStatements>;
 
@@ -524,12 +524,14 @@ export class OracleCheckpointSaver extends BaseCheckpointSaver {
       this.connectionOptions = options.connection;
       this.ownsConnection = true;
     }
-    this.tablePrefix = validateTablePrefix(options.tablePrefix);
+    this.tableSuffix = options.tableSuffix
+      ? validateTableSuffix(options.tableSuffix)
+      : "";
     this.jsonSizeThresholdMb = validateJsonSizeThreshold(
       options.jsonSizeThresholdMb
     );
-    this.sql = getOracleSQLStatements(this.tablePrefix);
-    this.setupSql = getOracleSetupStatements(this.tablePrefix);
+    this.sql = getOracleSQLStatements(this.tableSuffix);
+    this.setupSql = getOracleSetupStatements(this.tableSuffix);
   }
 
   /**
@@ -554,7 +556,7 @@ export class OracleCheckpointSaver extends BaseCheckpointSaver {
 
   async setup(): Promise<void> {
     this.setupPromise ??= this.withTransaction(async (connection) => {
-      const migrations = getMigrations(this.tablePrefix);
+      const migrations = getMigrations(this.tableSuffix);
       let currentVersion = -1;
 
       try {
@@ -628,9 +630,9 @@ export class OracleCheckpointSaver extends BaseCheckpointSaver {
     options: OracleDiagnosticsOptions = {}
   ): Promise<OracleCheckpointSaverDiagnostics> {
     return this.withConnection(async (connection) => {
-      const tables = getOracleCheckpointTables(this.tablePrefix);
+      const tables = getOracleCheckpointTables(this.tableSuffix);
       const expectedTables = getExpectedCheckpointTables(tables);
-      const expectedVersions = getMigrations(this.tablePrefix).map(
+      const expectedVersions = getMigrations(this.tableSuffix).map(
         (_migration, version) => version
       );
       const schema = await inspectOracleSchema(
@@ -647,7 +649,7 @@ export class OracleCheckpointSaver extends BaseCheckpointSaver {
       const diagnostics: OracleCheckpointSaverDiagnostics = {
         kind: "checkpoint",
         status: getOracleDiagnosticsStatus(schema, migrations),
-        tablePrefix: this.tablePrefix,
+        tableSuffix: this.tableSuffix,
         tables,
         runtime: getOracleRuntimeDiagnostics(oracledb, connection),
         migrations,
@@ -681,7 +683,7 @@ export class OracleCheckpointSaver extends BaseCheckpointSaver {
         checkpointId,
         limit: 1,
       },
-      this.tablePrefix
+      this.tableSuffix
     );
 
     const rows = await this.selectCheckpointRows(query.sql, query.binds);
@@ -714,7 +716,7 @@ export class OracleCheckpointSaver extends BaseCheckpointSaver {
         metadataFilter: options?.filter,
         limit,
       },
-      this.tablePrefix
+      this.tableSuffix
     );
     if (limit !== undefined && limit <= 0) return;
     await this.setup();
@@ -1057,7 +1059,7 @@ export class OracleCheckpointSaver extends BaseCheckpointSaver {
   private async validateCheckpointSchema(
     connection: OracleConnectionLike
   ): Promise<void> {
-    const tables = getOracleCheckpointTables(this.tablePrefix);
+    const tables = getOracleCheckpointTables(this.tableSuffix);
     const result = await connection.execute<OracleRow>(
       `SELECT table_name, column_name, data_type
 FROM user_tab_columns

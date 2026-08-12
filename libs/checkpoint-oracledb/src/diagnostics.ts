@@ -127,7 +127,7 @@ export interface OracleStoreVectorDiagnostics {
 export interface OracleCheckpointSaverDiagnostics {
   kind: "checkpoint";
   status: OracleDiagnosticsStatus;
-  tablePrefix: string;
+  tableSuffix: string;
   tables: {
     checkpoints: string;
     checkpoint_blobs: string;

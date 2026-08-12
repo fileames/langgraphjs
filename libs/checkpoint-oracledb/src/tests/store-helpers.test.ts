@@ -4,7 +4,9 @@ import { describe, expect, test } from "vitest";
 import {
   generatedIdentifier,
   validateIdentifier,
-} from "../store/identifiers.js";
+  suffixedTableName,
+  validateTableSuffix,
+} from "../identifiers.js";
 import { getTextAtPath, jsonValueExpression } from "../store/json-path.js";
 import {
   decodeStoreKey,
@@ -160,5 +162,130 @@ describe("Python embedding text parity", () => {
   test("keeps non-ASCII unescaped, unlike the index configuration hash", () => {
     // get_text_at_path uses ensure_ascii=False; _generate_suffix does not.
     expect(getTextAtPath({ t: { x: "é" } }, "t")).toEqual(['{"x": "é"}']);
+  });
+});
+
+describe("Oracle identifier quoting rules", () => {
+  // We only ever emit unquoted identifiers, which Oracle folds to upper case
+  // and restricts to [A-Za-z][A-Za-z0-9_$#]*. Anything that would require
+  // double quoting has to be rejected, not silently quoted, or two callers
+  // could disagree about which table they are addressing.
+  test("folds unquoted identifiers to upper case", () => {
+    expect(validateIdentifier("checkpoints")).toBe("CHECKPOINTS");
+    expect(validateIdentifier("CheckPoints")).toBe("CHECKPOINTS");
+    expect(validateIdentifier("CHECKPOINTS")).toBe("CHECKPOINTS");
+  });
+
+  test("resolves any casing of a suffix to one table name", () => {
+    const names = ["memory", "MEMORY", "MeMoRy"].map(
+      (suffix) => suffixedTableName("CHECKPOINTS", suffix)
+    );
+    expect(new Set(names)).toEqual(new Set(["CHECKPOINTS_MEMORY"]));
+  });
+
+  test("omits the separator when no suffix is given", () => {
+    expect(suffixedTableName("CHECKPOINTS")).toBe("CHECKPOINTS");
+    expect(suffixedTableName("CHECKPOINTS", "")).toBe("CHECKPOINTS");
+  });
+
+  test("rejects suffixes that would need double quoting", () => {
+    for (const suffix of [
+      'my"table', // embedded quote
+      '"quoted"', // caller pre-quoting the name
+      "my table", // space
+      "my-table", // hyphen
+      "my.table", // schema qualification
+      "tenant;DROP TABLE CHECKPOINTS", // statement break
+      "1memory", // leading digit
+      "mémoire", // non-ASCII
+      "memory$", // legal in an identifier, but not in a suffix
+      "memory#",
+    ]) {
+      expect(() => validateTableSuffix(suffix)).toThrow(
+        /must start with a letter/
+      );
+      expect(() => suffixedTableName("CHECKPOINTS", suffix)).toThrow(
+        /must start with a letter/
+      );
+    }
+  });
+
+  test("rejects identifiers that would need double quoting", () => {
+    for (const identifier of [
+      'CHECK"POINTS',
+      '"CHECKPOINTS"',
+      "CHECK POINTS",
+      "CHECK-POINTS",
+      "CHECK.POINTS",
+      "1CHECKPOINTS",
+      "CHECKPOINTS; DROP TABLE X",
+    ]) {
+      expect(() => validateIdentifier(identifier)).toThrow(
+        /Invalid Oracle identifier/
+      );
+    }
+  });
+
+  test("enforces the 128 byte identifier limit after suffixing", () => {
+    expect(() =>
+      suffixedTableName("CHECKPOINT_MIGRATIONS", "A".repeat(64))
+    ).not.toThrow();
+    // Longer than Python's 64 character suffix rule.
+    expect(() => validateTableSuffix("A".repeat(65))).toThrow(
+      /maximum length of 64 characters/
+    );
+  });
+
+  test("keeps a reserved word usable as a suffix", () => {
+    // The suffix is never a standalone identifier, so reserved words are fine.
+    expect(suffixedTableName("CHECKPOINTS", "table")).toBe(
+      "CHECKPOINTS_TABLE"
+    );
+    expect(suffixedTableName("STORE", "order")).toBe("STORE_ORDER");
+  });
+});
+
+describe("Oracle identifier hardening", () => {
+  test("rejects a trailing newline", () => {
+    // JavaScript's `$` (without /m) does not match before a trailing newline,
+    // unlike Python's re, so anchoring alone is enough here.
+    expect(() => validateTableSuffix("memory\n")).toThrow();
+    expect(() =>
+      validateIdentifier("CHECKPOINTS\nDROP TABLE X")
+    ).toThrow(/Invalid Oracle identifier/);
+  });
+
+  test("rejects characters that upper-case into ASCII", () => {
+    // U+0131 -> I and U+017F -> S, so validating after folding would admit
+    // them. Validation runs on the original string.
+    for (const identifier of ["ıdent", "ſtore", "Åelvin"]) {
+      expect(() => validateIdentifier(identifier)).toThrow(
+        /Invalid Oracle identifier/
+      );
+    }
+  });
+
+  test("rejects control characters and whitespace", () => {
+    expect(() => validateIdentifier("CHECK\tPOINTS")).toThrow(
+      /Invalid Oracle identifier/
+    );
+    expect(() => validateTableSuffix("mem ory")).toThrow();
+  });
+
+  test("rejects non-string input with a clear message", () => {
+    for (const value of [null, undefined, 123, true, {}, []]) {
+      expect(() => validateIdentifier(value as never)).toThrow(
+        /Invalid Oracle identifier/
+      );
+      expect(() => validateTableSuffix(value as never)).toThrow(
+        /must start with a letter/
+      );
+    }
+  });
+
+  test("rejects a hostile base name even with a valid suffix", () => {
+    expect(() =>
+      suffixedTableName("CHECKPOINTS; DROP TABLE X", "memory")
+    ).toThrow(/Invalid Oracle identifier/);
   });
 });

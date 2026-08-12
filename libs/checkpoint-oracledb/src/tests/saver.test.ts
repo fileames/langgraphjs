@@ -91,17 +91,17 @@ class FakeConnection implements OracleConnectionLike {
       return {
         rows: [
           {
-            TABLE_NAME: "LANGGRAPH_CHECKPOINTS",
+            TABLE_NAME: "CHECKPOINTS",
             COLUMN_NAME: "CHECKPOINT",
             DATA_TYPE: this.options.checkpointDataType ?? "JSON",
           } as RowT,
           {
-            TABLE_NAME: "LANGGRAPH_CHECKPOINTS",
+            TABLE_NAME: "CHECKPOINTS",
             COLUMN_NAME: "METADATA",
             DATA_TYPE: "JSON",
           } as RowT,
           {
-            TABLE_NAME: "LANGGRAPH_CHECKPOINT_WRITES",
+            TABLE_NAME: "CHECKPOINT_WRITES",
             COLUMN_NAME: "TASK_PATH",
             DATA_TYPE: "VARCHAR2",
           } as RowT,
@@ -109,13 +109,13 @@ class FakeConnection implements OracleConnectionLike {
       };
     }
 
-    if (sql.includes("FROM LANGGRAPH_CHECKPOINTS cp")) {
+    if (sql.includes("FROM CHECKPOINTS cp")) {
       return { rows: (this.options.checkpointRows ?? []) as RowT[] };
     }
-    if (sql.includes("INNER JOIN LANGGRAPH_CHECKPOINT_BLOBS")) {
+    if (sql.includes("INNER JOIN CHECKPOINT_BLOBS")) {
       return { rows: (this.options.blobRows ?? []) as RowT[] };
     }
-    if (sql.includes("FROM LANGGRAPH_CHECKPOINT_WRITES cw")) {
+    if (sql.includes("FROM CHECKPOINT_WRITES cw")) {
       return { rows: (this.options.writeRows ?? []) as RowT[] };
     }
 
@@ -157,11 +157,11 @@ describe("OracleCheckpointSaver", () => {
   test("builds a saver from a Python style connection string", () => {
     const saver = OracleCheckpointSaver.fromConnString(
       "scott/tiger@localhost:1521/FREEPDB1",
-      { tablePrefix: "LG_", poolConfig: { maxSize: 4 } }
+      { tableSuffix: "LG", poolConfig: { maxSize: 4 } }
     );
     const probe = saver as unknown as {
       connectionOptions?: Record<string, unknown>;
-      tablePrefix: string;
+      tableSuffix: string;
     };
 
     expect(probe.connectionOptions).toEqual({
@@ -171,7 +171,7 @@ describe("OracleCheckpointSaver", () => {
       poolMin: 1,
       poolMax: 4,
     });
-    expect(probe.tablePrefix).toBe("LG_");
+    expect(probe.tableSuffix).toBe("LG");
   });
 
   test("rejects a malformed connection string before constructing", () => {
@@ -286,7 +286,7 @@ describe("OracleCheckpointSaver", () => {
       connection: new FakeConnection({ checkpointDataType: "BLOB" }),
     });
     await expect(incompatible.setup()).rejects.toThrow(
-      "LANGGRAPH_CHECKPOINTS.CHECKPOINT must be JSON, found BLOB"
+      "CHECKPOINTS.CHECKPOINT must be JSON, found BLOB"
     );
 
     const newer = new OracleCheckpointSaver({
@@ -376,7 +376,7 @@ describe("OracleCheckpointSaver", () => {
     );
 
     const checkpointExecution = connection.executions.find((execution) =>
-      execution.sql.includes("MERGE INTO LANGGRAPH_CHECKPOINTS")
+      execution.sql.includes("MERGE INTO CHECKPOINTS")
     );
     const storedCheckpoint = bindValue<{
       channel_values: Record<string, unknown>;
@@ -391,7 +391,7 @@ describe("OracleCheckpointSaver", () => {
     expect(storedCheckpoint.channel_values).not.toHaveProperty("set");
 
     const blobBatch = connection.executeManyExecutions.find((execution) =>
-      execution.sql.includes("MERGE INTO LANGGRAPH_CHECKPOINT_BLOBS")
+      execution.sql.includes("MERGE INTO CHECKPOINT_BLOBS")
     );
     const blobChannels = (blobBatch?.binds ?? [])
       .map((binds) => bindValue<string>(binds.channel))
@@ -431,7 +431,7 @@ describe("OracleCheckpointSaver", () => {
     );
 
     const checkpointExecution = connection.executions.find((execution) =>
-      execution.sql.includes("MERGE INTO LANGGRAPH_CHECKPOINTS")
+      execution.sql.includes("MERGE INTO CHECKPOINTS")
     );
     expect(bindValue(checkpointExecution?.binds?.checkpoint)).toMatchObject({
       channel_values: { primitive: "inline" },
@@ -439,7 +439,7 @@ describe("OracleCheckpointSaver", () => {
     expect(
       connection.executeManyExecutions.some(
         (execution) =>
-          execution.sql.includes("MERGE INTO LANGGRAPH_CHECKPOINT_BLOBS") &&
+          execution.sql.includes("MERGE INTO CHECKPOINT_BLOBS") &&
           execution.binds.some(
             (binds) => bindValue(binds.channel) === "object"
           )

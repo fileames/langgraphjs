@@ -9,20 +9,20 @@ import {
   encodeTaskPath,
   getOracleCheckpointTables,
   getPendingSendsParams,
-  validateTablePrefix,
+  validateTableSuffix,
 } from "../sql.js";
 import { getMigrations } from "../migrations.js";
 
 describe("Oracle SQL helpers", () => {
-  test("validates and normalizes table prefixes", () => {
-    expect(validateTablePrefix()).toBe("LANGGRAPH_");
-    expect(validateTablePrefix("demo_")).toBe("DEMO_");
-    expect(validateTablePrefix("")).toBe("");
-    expect(() => validateTablePrefix("1bad")).toThrow(
+  test("validates table suffixes with the Python rule", () => {
+    expect(validateTableSuffix("demo")).toBe("demo");
+    expect(validateTableSuffix("Demo_1")).toBe("Demo_1");
+    expect(() => validateTableSuffix("")).toThrow(/must start with a letter/);
+    expect(() => validateTableSuffix("1bad")).toThrow(
       /must start with a letter/
     );
-    expect(() => validateTablePrefix("A".repeat(120))).toThrow(
-      /exceeds 128 characters/
+    expect(() => validateTableSuffix("A".repeat(65))).toThrow(
+      /maximum length of 64 characters/
     );
     for (const invalidPrefix of [
       "bad;drop",
@@ -32,19 +32,32 @@ describe("Oracle SQL helpers", () => {
       "bad--comment",
       "bad/*comment*/",
     ]) {
-      expect(() => validateTablePrefix(invalidPrefix)).toThrow(
-        /contain only letters, numbers, or underscores/
+      expect(() => validateTableSuffix(invalidPrefix)).toThrow(
+        /letters, digits, or underscores/
       );
     }
   });
 
   test("builds checkpoint table names", () => {
-    expect(getOracleCheckpointTables("lg_")).toEqual({
-      checkpoints: "LG_CHECKPOINTS",
-      checkpoint_blobs: "LG_CHECKPOINT_BLOBS",
-      checkpoint_writes: "LG_CHECKPOINT_WRITES",
-      checkpoint_migrations: "LG_CHECKPOINT_MIGRATIONS",
+    expect(getOracleCheckpointTables("lg")).toEqual({
+      checkpoints: "CHECKPOINTS_LG",
+      checkpoint_blobs: "CHECKPOINT_BLOBS_LG",
+      checkpoint_writes: "CHECKPOINT_WRITES_LG",
+      checkpoint_migrations: "CHECKPOINT_MIGRATIONS_LG",
     });
+
+    // No suffix gives the bare names Python creates.
+    expect(getOracleCheckpointTables()).toEqual({
+      checkpoints: "CHECKPOINTS",
+      checkpoint_blobs: "CHECKPOINT_BLOBS",
+      checkpoint_writes: "CHECKPOINT_WRITES",
+      checkpoint_migrations: "CHECKPOINT_MIGRATIONS",
+    });
+
+    // The suffix is used verbatim, so a trailing underscore is kept.
+    expect(getOracleCheckpointTables("lg_").checkpoints).toBe(
+      "CHECKPOINTS_LG_"
+    );
   });
 
   test("uses the Python-compatible checkpoint migration history", () => {
@@ -93,7 +106,7 @@ describe("Oracle SQL helpers", () => {
       "lg_"
     );
 
-    expect(select.sql).toContain("FROM LG_CHECKPOINTS");
+    expect(select.sql).toContain("FROM CHECKPOINTS_LG");
     expect(select.sql).toContain("WHERE thread_id = :thread_id");
     expect(select.sql).toContain("checkpoint_ns = :checkpoint_ns");
     expect(select.sql).toContain("checkpoint_id = :checkpoint_id");
