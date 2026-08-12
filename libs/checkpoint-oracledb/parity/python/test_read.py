@@ -177,9 +177,11 @@ def test_store_namespace_prefix_search(kv_store, case):
 
 def test_list_namespaces(kv_store):
     namespaces = kv_store.list_namespaces(prefix=("parity",), limit=100)
-    as_lists = {list(ns) for ns in map(tuple, namespaces)}
-    assert ("parity", "basic") in as_lists
-    assert ("parity", "deep", "a", "b", "c") in as_lists
+    # list_namespaces may hand back lists or tuples depending on the driver
+    # path, so normalise before comparing.
+    observed = {tuple(namespace) for namespace in namespaces}
+    assert ("parity", "basic") in observed
+    assert ("parity", "deep", "a", "b", "c") in observed
 
 
 # --------------------------------------------------------------------------
