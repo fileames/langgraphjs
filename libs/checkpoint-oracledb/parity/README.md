@@ -37,7 +37,13 @@ Order is not optional, so each phase is its own script:
 | `99-teardown.sh` | Drops the tables and rows this run created |
 
 Each script can be run on its own once `00-setup.sh` has picked the suffix,
-which is stored in `.state/run.env` so every phase agrees on it.
+which is stored in `.state/run.env` so every phase agrees on it. Every
+`00-setup.sh` picks a **new** suffix, so runs never reuse each other's tables;
+pin one with `PARITY_SUFFIX=... ./00-setup.sh` if you need to.
+
+Re-running a writer phase against a suffix it already wrote will fail on the
+Python side — see *Upstream bugs found* below. Run `99-teardown.sh` and start a
+fresh run instead.
 
 ## How the two sides stay honest
 
@@ -83,6 +89,30 @@ language must land on the same tables, which is the A5 hash agreement.
 matching). They are documented rather than asserted, so this suite stays a
 parity check rather than a snapshot of current bugs. If you want them to fail
 loudly, promote them to assertions.
+
+## Upstream bugs found
+
+**`langgraph-oracledb` (Python): Decimal index params break `setup()`**
+
+`OracleStore.setup()` raises `TypeError: Object of type Decimal is not JSON
+serializable` whenever it re-validates a registered index configuration that
+contains a numeric `index_type` parameter. `_validate_configuration`
+`json.dumps()` the `index_params` it reads back from the Oracle JSON column,
+where numbers arrive as `Decimal`. The checkpoint side already has
+`_coerce_decimals` for exactly this; the store never applies it.
+
+No JavaScript involved — two consecutive Python `setup()` calls reproduce it:
+
+```bash
+cd parity/python && uv run python known_bugs/decimal_index_params.py
+```
+
+The JavaScript store is unaffected, because `assertStoredIndexConfigMatches`
+parses the JSON column into plain numbers.
+
+Until it is fixed upstream, the shared index configuration in this suite uses
+no numeric `index_type` parameters. That is a workaround, not a preference —
+restore `neighbor_partitions` once the fix ships.
 
 ## Troubleshooting
 

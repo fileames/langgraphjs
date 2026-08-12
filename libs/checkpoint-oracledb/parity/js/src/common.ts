@@ -116,13 +116,20 @@ export const parityEmbeddings = {
   },
 };
 
-/** Index configuration used by both languages for the vector cases. */
+/**
+ * Index configuration used by both languages for the vector cases.
+ *
+ * No numeric `index_type` parameters on purpose: Python's
+ * `_validate_configuration` json.dumps() the stored `index_params`, which come
+ * back from the Oracle JSON column as `Decimal`, so any numeric parameter
+ * makes a second `setup()` raise. See `python/known_bugs/`.
+ */
 export function indexConfig() {
   return {
     dims: EMBED_DIMS,
     embeddings: parityEmbeddings as never,
     fields: ["text"],
-    index_type: { type: "ivf" as const, neighbor_partitions: 1 },
+    index_type: { type: "ivf" as const },
   };
 }
 
@@ -131,7 +138,7 @@ export function wholeDocumentIndexConfig() {
   return {
     dims: EMBED_DIMS,
     embeddings: parityEmbeddings as never,
-    index_type: { type: "ivf" as const, neighbor_partitions: 1 },
+    index_type: { type: "ivf" as const },
   };
 }
 

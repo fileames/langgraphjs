@@ -107,11 +107,16 @@ class ParityEmbeddings(Embeddings):
 
 def index_config() -> dict[str, Any]:
     """Index configuration used by both languages for the vector cases."""
+    # NOTE: no numeric index_type parameters here on purpose. Python's
+    # _validate_configuration json.dumps() the stored index_params, which come
+    # back from the Oracle JSON column as Decimal, so any numeric parameter
+    # makes a second setup() raise "Object of type Decimal is not JSON
+    # serializable". See python/known_bugs/decimal_index_params.py.
     return {
         "dims": EMBED_DIMS,
         "embed": ParityEmbeddings(),
         "fields": ["text"],
-        "index_type": {"type": "ivf", "neighbor_partitions": 1},
+        "index_type": {"type": "ivf"},
     }
 
 
@@ -120,7 +125,7 @@ def whole_document_index_config() -> dict[str, Any]:
     return {
         "dims": EMBED_DIMS,
         "embed": ParityEmbeddings(),
-        "index_type": {"type": "ivf", "neighbor_partitions": 1},
+        "index_type": {"type": "ivf"},
     }
 
 

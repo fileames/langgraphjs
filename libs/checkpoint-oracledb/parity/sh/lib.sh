@@ -41,9 +41,12 @@ load_dotenv() {
 # One suffix per run, shared by both languages and every phase.
 init_run_state() {
   mkdir -p "${PARITY_ROOT}/.state"
+  # A new suffix on every setup. Re-running a writer against an already
+  # registered configuration hits a Python bug (see parity/README.md), and a
+  # fresh suffix keeps each run independent anyway.
   if [[ -n "${PARITY_SUFFIX:-}" ]]; then
     printf 'PARITY_SUFFIX=%s\n' "${PARITY_SUFFIX}" > "${STATE_FILE}"
-  elif [[ ! -f "${STATE_FILE}" ]]; then
+  else
     local generated
     generated="P$(date +%s | tail -c 7)$(printf '%04d' $((RANDOM % 10000)))"
     printf 'PARITY_SUFFIX=%s\n' "${generated}" > "${STATE_FILE}"

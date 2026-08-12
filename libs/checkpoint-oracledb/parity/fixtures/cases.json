@@ -1,11 +1,9 @@
 {
   "comment": "Language-neutral fixtures. Both the Python and the JavaScript side read this file, so neither can drift from the other's idea of what was written.",
-
   "embedding": {
     "dims": 8,
     "comment": "Deterministic bucket embedding, implemented identically in both languages: bucket = codepoint % dims, then L2 normalise."
   },
-
   "checkpoints": {
     "threads": [
       {
@@ -19,7 +17,16 @@
           "bool_true": true,
           "bool_false": false,
           "null_value": null,
-          "nested": { "a": [1, 2, 3], "b": { "c": "d" } },
+          "nested": {
+            "a": [
+              1,
+              2,
+              3
+            ],
+            "b": {
+              "c": "d"
+            }
+          },
           "unicode": "héllo wörld こんにちは 🙂",
           "empty_string": "",
           "empty_object": {},
@@ -29,7 +36,13 @@
           "source": "parity",
           "step": 1,
           "writes": null,
-          "nested": { "tenant": "acme", "flags": ["x", "y"] },
+          "nested": {
+            "tenant": "acme",
+            "flags": [
+              "x",
+              "y"
+            ]
+          },
           "unicode": "naïve café",
           "big_int": 9007199254740991
         }
@@ -38,19 +51,28 @@
         "id": "parity-namespaced",
         "checkpoint_ns": "child|branch",
         "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b876",
-        "channel_values": { "scoped": "in a namespace" },
-        "metadata": { "source": "parity", "step": 2 }
+        "channel_values": {
+          "scoped": "in a namespace"
+        },
+        "metadata": {
+          "source": "parity",
+          "step": 2
+        }
       },
       {
         "id": "parity-lineage",
         "checkpoint_ns": "",
         "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b880",
         "parent_checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
-        "channel_values": { "plain": "second revision" },
-        "metadata": { "source": "parity", "step": 3 }
+        "channel_values": {
+          "plain": "second revision"
+        },
+        "metadata": {
+          "source": "parity",
+          "step": 3
+        }
       }
     ],
-
     "writes": [
       {
         "thread_id": "parity-basic",
@@ -59,9 +81,18 @@
         "task_id": "task-a",
         "task_path": "",
         "writes": [
-          ["messages", "first value"],
-          ["messages", "second value"],
-          ["counter", 7]
+          [
+            "messages",
+            "first value"
+          ],
+          [
+            "messages",
+            "second value"
+          ],
+          [
+            "counter",
+            7
+          ]
         ]
       },
       {
@@ -70,7 +101,12 @@
         "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
         "task_id": "task-b",
         "task_path": "~branch",
-        "writes": [["messages", "from another task"]]
+        "writes": [
+          [
+            "messages",
+            "from another task"
+          ]
+        ]
       },
       {
         "thread_id": "parity-basic",
@@ -78,25 +114,46 @@
         "checkpoint_id": "1ef4f797-8335-6428-8001-8a1503f9b875",
         "task_id": "task-error",
         "task_path": "",
-        "writes": [["__error__", "boom"]]
+        "writes": [
+          [
+            "__error__",
+            "boom"
+          ]
+        ]
       }
     ]
   },
-
   "store": {
     "items": [
       {
-        "namespace": ["parity", "basic"],
+        "namespace": [
+          "parity",
+          "basic"
+        ],
         "key": "simple",
-        "value": { "text": "apple fruit", "score": 10, "color": "red" }
+        "value": {
+          "text": "apple fruit",
+          "score": 10,
+          "color": "red"
+        }
       },
       {
-        "namespace": ["parity", "basic"],
+        "namespace": [
+          "parity",
+          "basic"
+        ],
         "key": "second",
-        "value": { "text": "car vehicle", "score": 3, "color": "blue" }
+        "value": {
+          "text": "car vehicle",
+          "score": 3,
+          "color": "blue"
+        }
       },
       {
-        "namespace": ["parity", "types"],
+        "namespace": [
+          "parity",
+          "types"
+        ],
         "key": "all-types",
         "value": {
           "string": "text",
@@ -106,70 +163,193 @@
           "bool_true": true,
           "bool_false": false,
           "null_value": null,
-          "array": [1, "two", false, null, { "deep": true }],
-          "object": { "nested": { "deeper": [1, 2] } },
+          "array": [
+            1,
+            "two",
+            false,
+            null,
+            {
+              "deep": true
+            }
+          ],
+          "object": {
+            "nested": {
+              "deeper": [
+                1,
+                2
+              ]
+            }
+          },
           "empty_string": "",
           "empty_object": {},
           "empty_array": []
         }
       },
       {
-        "namespace": ["parity", "unicode"],
+        "namespace": [
+          "parity",
+          "unicode"
+        ],
         "key": "unicode-key-héllo-🙂",
-        "value": { "text": "naïve café こんにちは", "emoji": "🙂🚀" }
+        "value": {
+          "text": "naïve café こんにちは",
+          "emoji": "🙂🚀"
+        }
       },
       {
-        "namespace": ["parity", "deep", "a", "b", "c"],
+        "namespace": [
+          "parity",
+          "deep",
+          "a",
+          "b",
+          "c"
+        ],
         "key": "deep",
-        "value": { "text": "deeply nested namespace" }
+        "value": {
+          "text": "deeply nested namespace"
+        }
       }
     ],
-
     "filters": [
-      { "name": "eq-string", "filter": { "color": "red" }, "expect_keys": ["simple"] },
-      { "name": "eq-number", "filter": { "score": 10 }, "expect_keys": ["simple"] },
-      { "name": "gt", "filter": { "score": { "$gt": 5 } }, "expect_keys": ["simple"] },
-      { "name": "lte", "filter": { "score": { "$lte": 3 } }, "expect_keys": ["second"] },
-      { "name": "no-match", "filter": { "color": "chartreuse" }, "expect_keys": [] }
+      {
+        "name": "eq-string",
+        "filter": {
+          "color": "red"
+        },
+        "expect_keys": [
+          "simple"
+        ]
+      },
+      {
+        "name": "eq-number",
+        "filter": {
+          "score": 10
+        },
+        "expect_keys": [
+          "simple"
+        ]
+      },
+      {
+        "name": "gt",
+        "filter": {
+          "score": {
+            "$gt": 5
+          }
+        },
+        "expect_keys": [
+          "simple"
+        ]
+      },
+      {
+        "name": "lte",
+        "filter": {
+          "score": {
+            "$lte": 3
+          }
+        },
+        "expect_keys": [
+          "second"
+        ]
+      },
+      {
+        "name": "no-match",
+        "filter": {
+          "color": "chartreuse"
+        },
+        "expect_keys": []
+      }
     ],
-
     "namespace_prefixes": [
-      { "prefix": ["parity", "basic"], "expect_keys": ["second", "simple"] },
-      { "prefix": ["parity", "deep"], "expect_keys": ["deep"] },
-      { "prefix": ["parity", "missing"], "expect_keys": [] }
+      {
+        "prefix": [
+          "parity",
+          "basic"
+        ],
+        "expect_keys": [
+          "second",
+          "simple"
+        ]
+      },
+      {
+        "prefix": [
+          "parity",
+          "deep"
+        ],
+        "expect_keys": [
+          "deep"
+        ]
+      },
+      {
+        "prefix": [
+          "parity",
+          "missing"
+        ],
+        "expect_keys": []
+      }
     ]
   },
-
   "vector_store": {
     "items": [
       {
-        "namespace": ["parity", "vectors"],
+        "namespace": [
+          "parity",
+          "vectors"
+        ],
         "key": "fruit",
-        "value": { "text": "apple banana fruit" }
+        "value": {
+          "text": "apple banana fruit"
+        }
       },
       {
-        "namespace": ["parity", "vectors"],
+        "namespace": [
+          "parity",
+          "vectors"
+        ],
         "key": "vehicle",
-        "value": { "text": "car truck vehicle" }
+        "value": {
+          "text": "car truck vehicle"
+        }
       },
       {
-        "namespace": ["parity", "vectors"],
+        "namespace": [
+          "parity",
+          "vectors"
+        ],
         "key": "unindexed",
-        "value": { "text": "apple banana fruit" },
+        "value": {
+          "text": "apple banana fruit"
+        },
         "index": false
       }
     ],
     "queries": [
-      { "query": "apple banana fruit", "expect_first": "fruit" },
-      { "query": "car truck vehicle", "expect_first": "vehicle" }
+      {
+        "query": "apple banana fruit",
+        "expect_first": "fruit"
+      },
+      {
+        "query": "car truck vehicle",
+        "expect_first": "vehicle"
+      }
     ],
     "comment": "The whole-document default (fields ['$']) is exercised separately so that get_text_at_path serialisation parity is covered, not just field extraction."
   },
-
   "known_divergences": {
     "comment": "Behaviours that deliberately differ. Asserted so that an accidental change on either side is caught.",
     "checkpoint_metadata_filter": "JS uses containment (like both Postgres savers); Python Oracle compares sub-documents for equality.",
     "store_expired_reads": "JS hides expired items at read time (like PostgresStore); Python Oracle does not filter on expires_at.",
     "namespace_prefix_match": "JS matches exact-or-prefix.'.'; Python binds '<prefix>%' and also matches sibling namespaces sharing the string prefix."
+  },
+  "upstream_bugs": {
+    "comment": "Defects found in the published packages while building this suite. Not divergences: these are bugs, reproduced standalone.",
+    "python_decimal_index_params": {
+      "package": "langgraph-oracledb (Python)",
+      "symptom": "OracleStore.setup() raises TypeError: Object of type Decimal is not JSON serializable when re-validating a registered index configuration.",
+      "cause": "_validate_configuration json.dumps() the index_params read back from the Oracle JSON column, where numbers arrive as Decimal. The checkpoint side has _coerce_decimals for this; the store does not apply it.",
+      "trigger": "Any numeric index_type parameter (neighbors, efconstruction, neighbor_partitions, samples_per_partition, min_vectors_per_partition) plus an explicit table_suffix, on the second setup().",
+      "repro": "python/known_bugs/decimal_index_params.py",
+      "javascript_equivalent": "Not affected: assertStoredIndexConfigMatches parses the JSON column into plain numbers.",
+      "workaround_here": "The shared index configuration uses no numeric index_type parameters."
+    }
   }
 }
