@@ -1149,12 +1149,25 @@ describeIfOracle("OracleStore BaseStore contract", () => {
     });
   });
 
-  test("throws a clear error for query search without index config", async () => {
+  test("ignores a query when no index is configured, as Python does", async () => {
     await withStore(async (store) => {
-      await store.put(["query"], "item", { text: "apple fruit" });
-      await expect(store.search(["query"], { query: "apple" })).rejects.toThrow(
-        "OracleStore vector search requires an index configuration."
+      await store.put(["query"], "apple", { text: "apple fruit", kind: "a" });
+      await store.put(["query"], "car", { text: "car vehicle", kind: "b" });
+
+      // Python drops the query string and returns the filtered listing with a
+      // null score rather than raising.
+      const results = await store.search(["query"], { query: "apple" });
+      expect(new Set(results.map((item) => item.key))).toEqual(
+        new Set(["apple", "car"])
       );
+      expect(results.every((item) => item.score === undefined)).toBe(true);
+
+      // Filters and pagination still apply to the ignored-query listing.
+      const filtered = await store.search(["query"], {
+        query: "apple",
+        filter: { kind: "b" },
+      });
+      expect(filtered.map((item) => item.key)).toEqual(["car"]);
     });
   });
 });

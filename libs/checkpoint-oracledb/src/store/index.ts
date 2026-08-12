@@ -1813,7 +1813,10 @@ WHERE prefix = :namespacePath
     if (op.namespacePrefix.length > 0) {
       validateNamespacePathLength(op.namespacePrefix);
     }
-    if (op.query) {
+    // Without an index configuration there is nothing to embed the query
+    // against, so it is ignored and the filtered listing is returned. Python
+    // and InMemoryStore both do this.
+    if (op.query && this.indexConfig) {
       return this.vectorSearchOp(op);
     }
 
@@ -1847,6 +1850,7 @@ WHERE prefix = :namespacePath
   private async vectorSearchOp(
     op: OracleSearchOperation
   ): Promise<SearchItem[]> {
+    // Defensive: searchOp only routes here once an index configuration exists.
     if (!this.indexConfig) {
       throw new Error(
         "OracleStore vector search requires an index configuration."

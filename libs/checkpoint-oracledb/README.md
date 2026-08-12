@@ -171,7 +171,9 @@ once to create them up front, or let the first operation do it. Set
 `ensureTable: false` when the tables must already exist.
 
 Non-vector search returns the most recently updated items first, and vector
-search returns only items that have an embedding, both as in Python. Text
+search returns only items that have an embedding, both as in Python. A `query`
+passed to a store with no `index` configuration is ignored rather than
+rejected, again matching Python, so the result is the plain filtered listing. Text
 embedded from a document matches Python's `get_text_at_path` exactly, so the
 same document produces the same vector in either language.
 

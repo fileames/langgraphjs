@@ -143,6 +143,27 @@ interface StoreStateProbe {
 }
 
 describe("OracleStore runtime validation", () => {
+  test("routes a query to a plain listing when no index is configured", async () => {
+    const store = new OracleStore({
+      pool: unusedPool as never,
+      ensureTable: false,
+      tableSuffix: "NOINDEX",
+    });
+    const probe = store as unknown as {
+      vectorSearchOp: () => Promise<unknown>;
+      fetchRowsByPrefix: () => Promise<unknown[]>;
+    };
+    probe.vectorSearchOp = async () => {
+      throw new Error("vector search must not run without an index config");
+    };
+    probe.fetchRowsByPrefix = async () => [];
+
+    // Python drops the query string in this case rather than raising.
+    await expect(
+      store.search(["query"], { query: "apple" })
+    ).resolves.toEqual([]);
+  });
+
   test("builds a store from a Python style connection string", () => {
     const store = OracleStore.fromConnString(
       "scott/tiger@localhost:1521/FREEPDB1",
