@@ -143,6 +143,38 @@ interface StoreStateProbe {
 }
 
 describe("OracleStore runtime validation", () => {
+  test("builds a store from a Python style connection string", () => {
+    const store = OracleStore.fromConnString(
+      "scott/tiger@localhost:1521/FREEPDB1",
+      {
+        tableSuffix: "MEMORY",
+        ttl: { defaultTtl: 30 },
+        poolConfig: { minSize: 2, maxSize: 4 },
+      }
+    );
+    const probe = store as unknown as {
+      connectionOptions?: Record<string, unknown>;
+      tableSuffix: string;
+      ttlConfig?: { defaultTtl?: number };
+    };
+
+    expect(probe.connectionOptions).toEqual({
+      user: "scott",
+      password: "tiger",
+      connectString: "localhost:1521/FREEPDB1",
+      poolMin: 2,
+      poolMax: 4,
+    });
+    expect(probe.tableSuffix).toBe("MEMORY");
+    expect(probe.ttlConfig?.defaultTtl).toBe(30);
+  });
+
+  test("rejects a malformed connection string before constructing", () => {
+    expect(() => OracleStore.fromConnString("localhost:1521/FREEPDB1")).toThrow(
+      "Invalid Oracle connection string format"
+    );
+  });
+
   test("rejects invalid TTL configuration and per-write TTL values", async () => {
     for (const ttl of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
       expect(() => new OracleStore({ ttl: { defaultTtl: ttl } })).toThrow(

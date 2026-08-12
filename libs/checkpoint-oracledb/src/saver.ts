@@ -46,7 +46,14 @@ import {
   getPendingSendsParams,
   validateTablePrefix,
 } from "./sql.js";
-import { isOracleError, rowValue, validateUtf8ByteLength } from "./utils.js";
+import {
+  isOracleError,
+  parseOracleConnectionString,
+  poolConfigToConnectionOptions,
+  rowValue,
+  validateUtf8ByteLength,
+  type OraclePoolConfig,
+} from "./utils.js";
 
 export interface OracleConnectionOptions {
   [key: string]: unknown;
@@ -523,6 +530,26 @@ export class OracleCheckpointSaver extends BaseCheckpointSaver {
     );
     this.sql = getOracleSQLStatements(this.tablePrefix);
     this.setupSql = getOracleSetupStatements(this.tablePrefix);
+  }
+
+  /**
+   * Build a saver from a `user/password@dsn` connection string, as Python's
+   * `OracleSaver.from_conn_string` does.
+   */
+  static fromConnString(
+    connString: string,
+    options: Omit<OracleCheckpointSaverOptions, "connection" | "pool"> & {
+      poolConfig?: OraclePoolConfig;
+    } = {}
+  ): OracleCheckpointSaver {
+    const { poolConfig, ...saverOptions } = options;
+    return new OracleCheckpointSaver({
+      connection: {
+        ...parseOracleConnectionString(connString),
+        ...poolConfigToConnectionOptions(poolConfig),
+      },
+      ...saverOptions,
+    });
   }
 
   async setup(): Promise<void> {

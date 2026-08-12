@@ -18,6 +18,7 @@ export type {
   OracleStoreSearchOptions,
   OracleStoreTTLConfig,
 } from "./store/index.js";
+export type { OraclePoolConfig } from "./utils.js";
 export { ORACLE_VECTOR_DISTANCE_METRICS } from "./store/index-config.js";
 export type {
   OracleHNSWIndexTypeConfig,

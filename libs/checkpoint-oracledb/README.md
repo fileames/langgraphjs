@@ -66,6 +66,24 @@ read in both directions. A custom serializer must use compatible type tags and
 bytes in both languages; language-specific values such as Python pickle or
 Python-specific MessagePack extensions are not portable.
 
+Both components also accept Python's `user/password@dsn` connection string, so
+a `from_conn_string` snippet ports across unchanged:
+
+```ts
+import {
+  OracleCheckpointSaver,
+  OracleStore,
+} from "@langchain/langgraph-checkpoint-oracledb";
+
+const connString = "user/password@localhost:1521/FREEPDB1";
+
+const checkpointer = OracleCheckpointSaver.fromConnString(connString);
+const store = OracleStore.fromConnString(connString, {
+  tableSuffix: "memory",
+  poolConfig: { minSize: 1, maxSize: 10 },
+});
+```
+
 ## Usage with an existing pool or connection
 
 ```ts
@@ -148,7 +166,8 @@ listing even when no sweeper is configured. `sweepExpiredItems()` deletes them;
 related vector rows are removed by the shared schema's foreign-key cascade.
 
 `OracleStore` supports `get`, `put`, `delete`, `search`, `batch`, and
-`listNamespaces`. Tables are created automatically by default. Set
+`listNamespaces`. Tables are created automatically by default; call `setup()`
+once to create them up front, or let the first operation do it. Set
 `ensureTable: false` when the tables must already exist.
 
 Supported scalar filter operators are `$eq`, `$ne`, `$gt`, `$gte`, `$lt`,

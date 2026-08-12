@@ -6,6 +6,8 @@ import {
   optionalRowValue,
   oracleConstraintName,
   oracleErrorCode,
+  parseOracleConnectionString,
+  poolConfigToConnectionOptions,
   rowValue,
 } from "../utils.js";
 
@@ -41,5 +43,43 @@ describe("Oracle utils", () => {
     const longName = oracleConstraintName("A".repeat(200), "JsonCheck");
     expect(longName).toMatch(/_JsonCheck$/);
     expect(Buffer.byteLength(longName, "utf8")).toBeLessThanOrEqual(128);
+  });
+
+  test("parses the Python user/password@dsn connection string", () => {
+    expect(
+      parseOracleConnectionString("scott/tiger@localhost:1521/FREEPDB1")
+    ).toEqual({
+      user: "scott",
+      password: "tiger",
+      connectString: "localhost:1521/FREEPDB1",
+    });
+  });
+
+  test("rejects the formats Python rejects", () => {
+    for (const connString of [
+      "localhost:1521/FREEPDB1",
+      "scott@localhost:1521/FREEPDB1",
+      "scott/tiger/extra@localhost:1521/FREEPDB1",
+      "scott/tiger@host@other",
+      "",
+      42 as never,
+    ]) {
+      expect(() => parseOracleConnectionString(connString)).toThrow(
+        "Invalid Oracle connection string format"
+      );
+    }
+  });
+
+  test("maps pool_config onto node-oracledb pool options", () => {
+    expect(poolConfigToConnectionOptions()).toEqual({});
+    // Python defaults: min 1, max 10.
+    expect(poolConfigToConnectionOptions({})).toEqual({
+      poolMin: 1,
+      poolMax: 10,
+    });
+    expect(poolConfigToConnectionOptions({ minSize: 2, maxSize: 4 })).toEqual({
+      poolMin: 2,
+      poolMax: 4,
+    });
   });
 });

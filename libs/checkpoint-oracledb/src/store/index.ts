@@ -69,7 +69,13 @@ import {
   namespacePrefixLikePattern,
   validateNamespace,
 } from "./namespace.js";
-import { isOracleError, validateUtf8ByteLength } from "../utils.js";
+import {
+  isOracleError,
+  parseOracleConnectionString,
+  poolConfigToConnectionOptions,
+  validateUtf8ByteLength,
+  type OraclePoolConfig,
+} from "../utils.js";
 
 export interface OracleConnectionOptions {
   [key: string]: unknown;
@@ -685,6 +691,26 @@ export class OracleStore extends BaseStore {
     this.ttlConfig = options.ttl;
   }
 
+  /**
+   * Build a store from a `user/password@dsn` connection string, as Python's
+   * `OracleStore.from_conn_string` does.
+   */
+  static fromConnString(
+    connString: string,
+    options: Omit<OracleStoreOptions, "connection" | "pool"> & {
+      poolConfig?: OraclePoolConfig;
+    } = {}
+  ): OracleStore {
+    const { poolConfig, ...storeOptions } = options;
+    return new OracleStore({
+      connection: {
+        ...parseOracleConnectionString(connString),
+        ...poolConfigToConnectionOptions(poolConfig),
+      },
+      ...storeOptions,
+    });
+  }
+
   async put(
     namespace: string[],
     key: string,
@@ -889,7 +915,11 @@ WHERE expires_at IS NOT NULL AND expires_at <= CURRENT_TIMESTAMP`
     });
   }
 
-  private async setup(): Promise<void> {
+  /**
+   * Create the tables and run migrations. Safe to call repeatedly; `start()`
+   * and every operation call it as well.
+   */
+  async setup(): Promise<void> {
     if (this.isSetup) return;
     this.setupPromise ??= this.doSetup().catch((error) => {
       this.setupPromise = undefined;

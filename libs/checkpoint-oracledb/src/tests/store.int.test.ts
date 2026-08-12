@@ -2354,3 +2354,46 @@ describeIfOracle("OracleStore vector index configuration", () => {
     }
   });
 });
+
+describeIfOracle("OracleStore lifecycle", () => {
+  const connString = `${ORACLE_USER}/${ORACLE_PASSWORD}@${ORACLE_CONNECT_STRING}`;
+
+  test("round-trips through a Python style connection string", async () => {
+    const prefix = uniquePrefix();
+    const store = OracleStore.fromConnString(connString, {
+      tableSuffix: prefix,
+      poolConfig: { minSize: 1, maxSize: 2 },
+    });
+
+    try {
+      await store.setup();
+      await store.put(["conn"], "item", { text: "hello" });
+      await expect(store.get(["conn"], "item")).resolves.toMatchObject({
+        value: { text: "hello" },
+      });
+    } finally {
+      await store.stop();
+      await dropStoreTables(prefix);
+    }
+  });
+
+  test("setup is public, idempotent, and not required before use", async () => {
+    const prefix = uniquePrefix();
+    const store = new OracleStore({
+      connection: oracleConnection,
+      tableSuffix: prefix,
+    });
+
+    try {
+      await store.setup();
+      await store.setup();
+      await store.put(["setup"], "item", { text: "hello" });
+      await expect(store.get(["setup"], "item")).resolves.toMatchObject({
+        value: { text: "hello" },
+      });
+    } finally {
+      await store.stop();
+      await dropStoreTables(prefix);
+    }
+  });
+});

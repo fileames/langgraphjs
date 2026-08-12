@@ -44,6 +44,42 @@ export const validateUtf8ByteLength = (
   }
 };
 
+/** Pool sizing, named as in Python's `pool_config`. */
+export interface OraclePoolConfig {
+  minSize?: number;
+  maxSize?: number;
+}
+
+const CONN_STRING_ERROR =
+  "Invalid Oracle connection string format. Expected 'user/password@host:port/service_name'";
+
+/**
+ * Split `user/password@dsn` the way Python's `_validate_conn_string` does.
+ */
+export const parseOracleConnectionString = (
+  connString: string
+): { user: string; password: string; connectString: string } => {
+  if (typeof connString !== "string") throw new Error(CONN_STRING_ERROR);
+
+  const parts = connString.split("@");
+  if (parts.length !== 2) throw new Error(CONN_STRING_ERROR);
+
+  const [userPass, connectString] = parts;
+  const userParts = userPass.split("/");
+  if (userParts.length !== 2) throw new Error(CONN_STRING_ERROR);
+
+  const [user, password] = userParts;
+  return { user, password, connectString };
+};
+
+/** Map Python's `pool_config` onto node-oracledb pool options. */
+export const poolConfigToConnectionOptions = (
+  poolConfig?: OraclePoolConfig
+): { poolMin?: number; poolMax?: number } =>
+  poolConfig
+    ? { poolMin: poolConfig.minSize ?? 1, poolMax: poolConfig.maxSize ?? 10 }
+    : {};
+
 export const oracleConstraintName = (
   tableName: string,
   suffix: string

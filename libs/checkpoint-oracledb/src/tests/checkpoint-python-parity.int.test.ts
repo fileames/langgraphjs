@@ -958,3 +958,40 @@ describeIfOracle("Oracle checkpoint Python parity", () => {
     });
   });
 });
+
+describeIfOracle("OracleCheckpointSaver connection strings", () => {
+  test("round-trips through a Python style connection string", async () => {
+    const prefix = uniqueCheckpointPrefix("CONNSTR");
+    const saver = OracleCheckpointSaver.fromConnString(
+      `${ORACLE_USER}/${ORACLE_PASSWORD}@${ORACLE_CONNECT_STRING}`,
+      { tablePrefix: prefix, poolConfig: { minSize: 1, maxSize: 2 } }
+    );
+
+    try {
+      await saver.setup();
+      const config = {
+        configurable: { thread_id: "conn-string", checkpoint_ns: "" },
+      };
+      const checkpoint = {
+        v: 4,
+        id: "1ef4f797-8335-6428-8001-8a1503f9b875",
+        ts: "2024-07-31T20:14:19.804150+00:00",
+        channel_values: { text: "hello" },
+        channel_versions: {},
+        versions_seen: {},
+      } as unknown as Checkpoint;
+
+      const next = await saver.put(
+        config,
+        checkpoint,
+        {} as CheckpointMetadata,
+        {}
+      );
+      const tuple = await saver.getTuple(next);
+      expect(tuple?.checkpoint.channel_values).toEqual({ text: "hello" });
+    } finally {
+      await saver.end();
+      await dropCheckpointTables(prefix);
+    }
+  });
+});

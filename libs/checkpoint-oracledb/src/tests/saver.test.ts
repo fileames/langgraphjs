@@ -154,6 +154,32 @@ class FakeConnection implements OracleConnectionLike {
 }
 
 describe("OracleCheckpointSaver", () => {
+  test("builds a saver from a Python style connection string", () => {
+    const saver = OracleCheckpointSaver.fromConnString(
+      "scott/tiger@localhost:1521/FREEPDB1",
+      { tablePrefix: "LG_", poolConfig: { maxSize: 4 } }
+    );
+    const probe = saver as unknown as {
+      connectionOptions?: Record<string, unknown>;
+      tablePrefix: string;
+    };
+
+    expect(probe.connectionOptions).toEqual({
+      user: "scott",
+      password: "tiger",
+      connectString: "localhost:1521/FREEPDB1",
+      poolMin: 1,
+      poolMax: 4,
+    });
+    expect(probe.tablePrefix).toBe("LG_");
+  });
+
+  test("rejects a malformed connection string before constructing", () => {
+    expect(() =>
+      OracleCheckpointSaver.fromConnString("scott@localhost:1521/FREEPDB1")
+    ).toThrow("Invalid Oracle connection string format");
+  });
+
   test("shares concurrent lazy pool creation", async () => {
     const connection = new FakeConnection();
     let resolvePool!: (pool: unknown) => void;
