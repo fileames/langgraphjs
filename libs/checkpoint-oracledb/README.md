@@ -19,6 +19,10 @@ export ORACLE_PASSWORD="your_password"
 export ORACLE_CONNECT_STRING="host:port/service_name"
 ```
 
+A `.env` in the package root works too. `pnpm test:int` refuses to start when
+those variables are missing, because every test would skip and the run would
+still pass. To skip deliberately, set `ALLOW_SKIPPED_ORACLE_INT_TESTS=1`.
+
 ## Installation
 
 ```bash
@@ -74,6 +78,32 @@ Language-neutral JSON values, byte arrays, and default pending writes can be
 read in both directions. A custom serializer must use compatible type tags and
 bytes in both languages; language-specific values such as Python pickle or
 Python-specific MessagePack extensions are not portable.
+
+### What a custom serializer does and does not see
+
+Not every value passes through the serializer. Channel values are only routed
+to it when they go to the `checkpoint_blobs` table, which happens when a value
+is not plain JSON or exceeds `jsonSizeThresholdMb` (1 MiB by default). Smaller
+plain-JSON values stay inside the `checkpoint` column, and `metadata` is stored
+as JSON at any size.
+
+| Value | Passes through the serializer |
+| --- | --- |
+| Channel value over the size threshold, or not plain JSON | yes |
+| Channel value that is plain JSON and under the threshold | no |
+| `metadata` | no, at any size |
+| Pending writes | yes |
+
+This matters if the serializer is doing more than serialising. An encrypting
+serializer, for example, will not be applied to a small
+`{ "api_key": "..." }` channel value or to anything in `metadata`; both remain
+readable in the database, for instance through
+`JSON_SERIALIZE(checkpoint)`. Setting `jsonSizeThresholdMb: 0` forces every
+non-primitive channel value through the serializer, but `metadata` and
+primitive channel values are still stored as JSON.
+
+The Python `langgraph-oracledb` saver behaves the same way, so this is a
+property of the shared schema rather than of this package.
 
 Both components also accept Python's `user/password@dsn` connection string, so
 a `from_conn_string` snippet ports across unchanged:

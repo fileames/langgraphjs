@@ -4,10 +4,10 @@ version = "0.1.0"
 description = "Cross-language parity checks between langgraph-oracledb (Python) and @langchain/langgraph-checkpoint-oracledb (JavaScript)."
 requires-python = ">=3.10"
 dependencies = [
-    "langchain-core>=0.3.0",
-    "langgraph-oracledb>=1.0.1",
-    "oracledb>=2.5.0",
-    "pytest>=8.0.0",
+  "langchain-core>=0.3.0",
+  "langgraph-oracledb>=1.0.1",
+  "oracledb>=2.5.0",
+  "pytest>=8.0.0",
 ]
 
 [tool.pytest.ini_options]

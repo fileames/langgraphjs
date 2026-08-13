@@ -2,7 +2,10 @@
 //
 // Write every fixture from JavaScript so the Python side can read it back.
 // Runs with PARITY_DIRECTION=js2py.
-import type { Checkpoint, CheckpointMetadata } from "@langchain/langgraph-checkpoint";
+import type {
+  Checkpoint,
+  CheckpointMetadata,
+} from "@langchain/langgraph-checkpoint";
 
 import { OracleCheckpointSaver } from "../../../src/saver.js";
 import { OracleStore } from "../../../src/store/index.js";
@@ -18,7 +21,9 @@ import {
 
 const DIRECTION = "js2py";
 
-function channelVersions(values: Record<string, unknown>): Record<string, string> {
+function channelVersions(
+  values: Record<string, unknown>
+): Record<string, string> {
   return Object.fromEntries(
     Object.keys(values).map((channel) => [
       channel,
@@ -124,9 +129,15 @@ async function writeStore(): Promise<void> {
       await store.put(item.namespace, item.key, item.value);
       report("wrote store item", `${item.namespace.join(".")}/${item.key}`);
     }
-    await store.put(["parity", "ttl"], "live", { text: "still valid" }, undefined, {
-      ttl: 60,
-    });
+    await store.put(
+      ["parity", "ttl"],
+      "live",
+      { text: "still valid" },
+      undefined,
+      {
+        ttl: 60,
+      }
+    );
     await store.put(
       ["parity", "ttl"],
       "expiring",
